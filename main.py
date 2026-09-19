@@ -152,9 +152,9 @@ def health_check():
     dependencies=[Depends(verify_api_key)],
     response_model=AssetActionResponse,
     tags=["assets"],
-    summary="Créer un nouvel asset",
-    description="Crée un nouvel asset. Échoue avec 409 si un asset avec le même eic_code existe déjà.",
-    responses={409: {"description": "Un asset avec ce eic_code existe déjà"}},
+    summary="Create a new asset",
+    description="Creates a new asset. Fails with 409 if an asset with the same eic_code already exists.",
+    responses={409: {"description": "An asset with this eic_code already exists"}},
 )
 def create_asset(payload: AssetCreate, db: Session = Depends(get_db)):
     existing = db.query(Asset).filter(Asset.eic_code == payload.eic_code).first()
@@ -173,11 +173,11 @@ def create_asset(payload: AssetCreate, db: Session = Depends(get_db)):
     dependencies=[Depends(verify_api_key)],
     response_model=AssetActionResponse,
     tags=["assets"],
-    summary="Remplacer entièrement un asset",
-    description="Remplace tous les champs d'un asset existant identifié par son id. Tous les champs doivent être fournis.",
+    summary="Fully replace an asset",
+    description="Replaces all fields of an existing asset identified by its id. All fields must be provided.",
     responses={
-        404: {"description": "Asset introuvable"},
-        409: {"description": "Un autre asset avec ce eic_code existe déjà"},
+        404: {"description": "Asset not found"},
+        409: {"description": "Another asset with this eic_code already exists"},
     },
 )
 def replace_asset(asset_id: int, payload: AssetUpdate, db: Session = Depends(get_db)):
@@ -201,11 +201,11 @@ def replace_asset(asset_id: int, payload: AssetUpdate, db: Session = Depends(get
     dependencies=[Depends(verify_api_key)],
     response_model=AssetActionResponse,
     tags=["assets"],
-    summary="Modifier partiellement un asset",
-    description="Met à jour uniquement les champs fournis d'un asset existant identifié par son id.",
+    summary="Partially update an asset",
+    description="Updates only the provided fields of an existing asset identified by its id.",
     responses={
-        404: {"description": "Asset introuvable"},
-        409: {"description": "Un autre asset avec ce eic_code existe déjà"},
+        404: {"description": "Asset not found"},
+        409: {"description": "Another asset with this eic_code already exists"},
     },
 )
 def update_asset(asset_id: int, payload: AssetPatch, db: Session = Depends(get_db)):
