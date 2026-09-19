@@ -97,6 +97,30 @@ class AssetCreate(BaseModel):
     reactive_power_capacity_mvar: Optional[float] = None
     efficiency: Optional[float] = None
 
+class AssetUpdate(BaseModel):
+    eic_code: str
+    name: str
+    asset_type: AssetType
+    max_capacity_mwh: float
+    max_charge_rate_mw: float
+    max_discharge_rate_mw: float
+    reactive_power_capacity_mvar: Optional[float] = None
+    efficiency: Optional[float] = None
+
+class AssetPatch(BaseModel):
+    eic_code: Optional[str] = None
+    name: Optional[str] = None
+    asset_type: Optional[AssetType] = None
+    max_capacity_mwh: Optional[float] = None
+    max_charge_rate_mw: Optional[float] = None
+    max_discharge_rate_mw: Optional[float] = None
+    reactive_power_capacity_mvar: Optional[float] = None
+    efficiency: Optional[float] = None
+
+class AssetActionResponse(BaseModel):
+    action: str
+    asset_id: int
+
 class TelemetryCreate(BaseModel):
     timestamp: datetime
     energy_mwh: float
@@ -122,21 +146,84 @@ def health_check():
     return {"status": "healthy"}
 
 
-@app.post("/assets", status_code=201, dependencies=[Depends(verify_api_key)])
-def create_or_update_asset(payload: AssetCreate, db: Session = Depends(get_db)):
-    asset = db.query(Asset).filter(Asset.eic_code == payload.eic_code).first()
-    if asset:
-        for field, value in payload.model_dump(exclude={"eic_code"}).items():
-            setattr(asset, field, value)
-        db.commit()
-        db.refresh(asset)
-        return {"action": "updated", "asset_id": asset.id}
-    else:
-        asset = Asset(**payload.model_dump())
-        db.add(asset)
-        db.commit()
-        db.refresh(asset)
-        return {"action": "created", "asset_id": asset.id}
+@app.post(
+    "/assets",
+    status_code=201,
+    dependencies=[Depends(verify_api_key)],
+    response_model=AssetActionResponse,
+    tags=["assets"],
+    summary="Créer un nouvel asset",
+    description="Crée un nouvel asset. Échoue avec 409 si un asset avec le même eic_code existe déjà.",
+    responses={409: {"description": "Un asset avec ce eic_code existe déjà"}},
+)
+def create_asset(payload: AssetCreate, db: Session = Depends(get_db)):
+    existing = db.query(Asset).filter(Asset.eic_code == payload.eic_code).first()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Asset with eic_code {payload.eic_code} already exists")
+
+    asset = Asset(**payload.model_dump())
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    return {"action": "created", "asset_id": asset.id}
+
+
+@app.put(
+    "/assets/{asset_id}",
+    dependencies=[Depends(verify_api_key)],
+    response_model=AssetActionResponse,
+    tags=["assets"],
+    summary="Remplacer entièrement un asset",
+    description="Remplace tous les champs d'un asset existant identifié par son id. Tous les champs doivent être fournis.",
+    responses={
+        404: {"description": "Asset introuvable"},
+        409: {"description": "Un autre asset avec ce eic_code existe déjà"},
+    },
+)
+def replace_asset(asset_id: int, payload: AssetUpdate, db: Session = Depends(get_db)):
+    asset = db.query(Asset).filter(Asset.id == asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail=f"Asset {asset_id} not found")
+
+    conflict = db.query(Asset).filter(Asset.eic_code == payload.eic_code, Asset.id != asset_id).first()
+    if conflict:
+        raise HTTPException(status_code=409, detail=f"Asset with eic_code {payload.eic_code} already exists")
+
+    for field, value in payload.model_dump().items():
+        setattr(asset, field, value)
+    db.commit()
+    db.refresh(asset)
+    return {"action": "updated", "asset_id": asset.id}
+
+
+@app.patch(
+    "/assets/{asset_id}",
+    dependencies=[Depends(verify_api_key)],
+    response_model=AssetActionResponse,
+    tags=["assets"],
+    summary="Modifier partiellement un asset",
+    description="Met à jour uniquement les champs fournis d'un asset existant identifié par son id.",
+    responses={
+        404: {"description": "Asset introuvable"},
+        409: {"description": "Un autre asset avec ce eic_code existe déjà"},
+    },
+)
+def update_asset(asset_id: int, payload: AssetPatch, db: Session = Depends(get_db)):
+    asset = db.query(Asset).filter(Asset.id == asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail=f"Asset {asset_id} not found")
+
+    updates = payload.model_dump(exclude_unset=True)
+    if "eic_code" in updates:
+        conflict = db.query(Asset).filter(Asset.eic_code == updates["eic_code"], Asset.id != asset_id).first()
+        if conflict:
+            raise HTTPException(status_code=409, detail=f"Asset with eic_code {updates['eic_code']} already exists")
+
+    for field, value in updates.items():
+        setattr(asset, field, value)
+    db.commit()
+    db.refresh(asset)
+    return {"action": "updated", "asset_id": asset.id}
 
 
 @app.post("/assets/{asset_id}/telemetry", status_code=201, dependencies=[Depends(verify_api_key)])
