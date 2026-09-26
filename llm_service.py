@@ -1,6 +1,16 @@
-import ollama
+import os
+from dotenv import load_dotenv
+from openai import OpenAI
 from database import SessionLocal
 from models import Asset, AssetType
+
+load_dotenv()
+
+client = OpenAI(
+    base_url=os.getenv("VLLM_BASE_URL"),
+    api_key=os.getenv("VLLM_API_KEY", "not-needed"),
+)
+MODEL = os.getenv("VLLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
 
 
 def fetch_battery_context() -> str:
@@ -10,50 +20,40 @@ def fetch_battery_context() -> str:
         batteries = db.query(Asset).filter(Asset.asset_type == AssetType.BATTERY).all()
         if not batteries:
             return "No battery records found in the database."
-        result = []
-        for b in batteries:
-            result.append(
-                f"ID: {b.id}, Name: {b.name}, Capacity: {b.capacity_mwh} MWH, "
-                f"Max Charge Rate: {b.max_charge_rate_mw} MW, Active: {b.is_active}"
-            )
-        return "\n".join(result)
+        return "\n".join(
+            f"ID: {b.id}, Name: {b.name}, Capacity: {b.max_capacity_mwh} MWh, "
+            f"Max Charge Rate: {b.max_charge_rate_mw} MW"
+            for b in batteries
+        )
     finally:
         db.close()
 
 
 def ask_grid_question_stream(question: str):
-    """
-    Single-pass generator that streams tokens back to FastAPI.
-
-    Asset data is always fetched from the DB and injected into the system
-    prompt — no tool-calling round trip, so inference runs once only.
-    """
+    """Stream tokens from vLLM on the Spark back to FastAPI."""
     battery_data = fetch_battery_context()
 
     messages = [
         {
             "role": "system",
             "content": (
-                "You are an Electical grid  expert assistant managing Wind, Solar and BESS (Battery Energy Storage System) assets. "
-                "You have access to the following live asset data from the system database:\n\n"
-                f"{battery_data}\n\n"
+                "You are an electrical grid expert assistant managing Wind, Solar and BESS "
+                "(Battery Energy Storage System) assets. You have access to the following "
+                f"live asset data from the system database:\n\n{battery_data}\n\n"
                 "Use this data when answering questions about the batteries in the system. "
                 "For general grid questions not related to the database, answer from your expert knowledge."
-            )
+            ),
         },
-        {
-            "role": "user",
-            "content": question
-        }
+        {"role": "user", "content": question},
     ]
 
-    stream = ollama.chat(
-        model="mistral:7b-instruct",
+    stream = client.chat.completions.create(
+        model=MODEL,
         messages=messages,
-        stream=True
+        stream=True,
+        max_tokens=1024,
     )
 
     for chunk in stream:
-        token = chunk.message.content
-        if token:
-            yield token
+        if chunk.choices and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
