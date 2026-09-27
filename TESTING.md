@@ -2,24 +2,28 @@
 
 Ce document explique comment sont organisés les tests de l'API, comment les lancer,
 et comment en écrire de nouveaux, à partir d'exemples réels tirés de
-[tests/test_assets_crud.py](tests/test_assets_crud.py).
+[tests/test_assets_crud.py](tests/test_assets_crud.py) et
+[tests/test_assets_gps_api.py](tests/test_assets_gps_api.py).
 
 ## 1. Stack de test
 
 - **pytest** — exécuteur de tests
 - **FastAPI `TestClient`** (basé sur `httpx`) — envoie de vraies requêtes HTTP à l'application
   sans lancer de serveur
-- **SQLite en mémoire** — remplace Postgres pendant les tests, pour rester rapide et isolé
+- **PostgreSQL** — une base **dédiée aux tests**, `rada_test`, séparée de la base de
+  développement (`rada_dev`). Les tests ne touchent jamais les données de dev.
 
-Aucun test ne touche la base Postgres de développement/production : la session DB utilisée par
-l'API est remplacée ("overridée") par une session SQLite créée pour l'occasion.
+`rada_test` doit exister sur le même serveur Postgres que `DATABASE_URL` (même utilisateur/hôte,
+nom de base différent) avant de lancer les tests — voir section 9.
 
 ## 2. Où sont les fichiers
 
 ```
 tests/
-  conftest.py           # fixtures partagées (client, db_session, reset_db)
-  test_assets_crud.py   # tests des routes POST/PUT/PATCH /assets
+  conftest.py            # fixtures partagées (client, db_session, auth_headers, clean_tables)
+  test_assets_crud.py    # tests des routes POST/PUT/PATCH /assets
+  test_assets_gps_api.py # tests d'intégration GPS/edge_id sur les endpoints assets
+  test_asset_schema.py   # tests unitaires purs du schéma Pydantic AssetCreate (pas de DB/HTTP)
 ```
 
 Tout nouveau fichier de test doit être placé dans `tests/` et nommé `test_*.py` pour être
@@ -29,80 +33,79 @@ détecté automatiquement par pytest.
 
 ```python
 import os
-import sys
+from dotenv import load_dotenv
 
-os.environ.setdefault("AUTH_ENABLED", "false")
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+load_dotenv()
+
+_dev_url = os.environ["DATABASE_URL"]
+os.environ["DATABASE_URL"] = _dev_url.rsplit("/", 1)[0] + "/rada_test"
+os.environ["API_KEY"] = "test-api-key"
+os.environ["AUTH_ENABLED"] = "true"
+os.environ["TELEMETRY_SIMULATOR"] = "false"
+os.environ["ENVIRONMENT"] = "development"
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
 
-from database import Base
-from models import Asset
+import database
+import models  # noqa: F401 — registers all tables on database.Base.metadata
+
+database.Base.metadata.drop_all(bind=database.engine)
+database.Base.metadata.create_all(bind=database.engine)
+
 import main
 
-test_engine = create_engine(
-    "sqlite://",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+API_KEY = os.environ["API_KEY"]
 
 
-def _override_get_db():
-    db = TestingSessionLocal()
+@pytest.fixture()
+def db_session():
+    session = database.SessionLocal()
     try:
-        yield db
+        yield session
     finally:
-        db.close()
-
-
-main.app.dependency_overrides[main.get_db] = _override_get_db
+        session.close()
 
 
 @pytest.fixture(autouse=True)
-def reset_db():
-    Base.metadata.create_all(bind=test_engine, tables=[Asset.__table__])
+def clean_tables():
+    session = database.SessionLocal()
+    try:
+        session.execute(models.DispatchCommand.__table__.delete())
+        session.execute(models.StateOfCharge.__table__.delete())
+        session.execute(models.Asset.__table__.delete())
+        session.commit()
+    finally:
+        session.close()
     yield
-    Base.metadata.drop_all(bind=test_engine, tables=[Asset.__table__])
 
 
-@pytest.fixture
+@pytest.fixture()
 def client():
     with TestClient(main.app) as c:
         yield c
 
 
-@pytest.fixture
-def db_session():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+@pytest.fixture()
+def auth_headers():
+    return {"X-API-Key": API_KEY}
 ```
 
 Points clés :
 
 | Élément | Rôle |
 |---|---|
-| `AUTH_ENABLED=false` | Désactive la vérification de la clé API (`X-API-Key`) pendant les tests, pour ne pas avoir à la simuler dans chaque requête |
-| `sys.path.insert(...)` | Permet d'`import main` depuis `tests/` même si pytest est lancé depuis un autre dossier |
-| `test_engine` (SQLite `StaticPool`) | Une seule connexion SQLite partagée en mémoire pour toute la durée du process de test |
-| `main.app.dependency_overrides[main.get_db]` | Remplace la dépendance FastAPI `get_db` (qui pointe normalement vers Postgres) par la session SQLite de test — **c'est ce qui isole les tests de la vraie base** |
-| `reset_db` (`autouse=True`) | Recrée les tables avant chaque test et les supprime après, pour qu'aucun test ne voie les données laissées par un autre |
-| `client` | Fixture prête à l'emploi injectée dans un test via son nom en paramètre |
-| `db_session` | Donne un accès direct à la base de test, utile pour vérifier ce que l'API a réellement écrit en base |
+| `os.environ["DATABASE_URL"] = ... + "/rada_test"` | Redirige l'app vers la base de test **avant** d'importer `main`/`database`, quel que soit le contenu du `.env` du développeur |
+| `os.environ["API_KEY"] / ["AUTH_ENABLED"] = "true"` | Force une clé API connue et **active réellement l'authentification** pendant les tests (contrairement à un simple bypass) |
+| `Base.metadata.drop_all` puis `create_all` | Repart d'un schéma propre à chaque lancement de la suite (pas juste par test) |
+| `db_session` | Accès direct à la base de test, pour arranger ou vérifier l'état en base indépendamment des réponses HTTP |
+| `clean_tables` (`autouse=True`) | Vide les tables `assets`/`state_of_charge`/`dispatch_commands` avant **chaque** test pour qu'ils ne se polluent pas entre eux |
+| `client` | `TestClient` FastAPI prêt à l'emploi, injecté par son nom dans un test |
+| `auth_headers` | Dict `{"X-API-Key": "test-api-key"}` à passer dans `headers=` de chaque requête vers une route protégée |
 
-> ⚠️ **Piège SQLite** : `reset_db` ne crée que la table `Asset` (`tables=[Asset.__table__]`), pas
-> tout `Base.metadata`. Certains modèles du projet (ex. `StateOfCharge`, qui a une clé primaire
-> composite `id` + `timestamp`) ne sont pas compatibles avec l'auto-increment SQLite et font
-> planter `create_all()` si on les inclut. Si vous ajoutez des tests sur un nouveau modèle,
-> ajoutez sa table à la liste `tables=[...]` plutôt que de repasser par `Base.metadata.create_all()`
-> sans filtre.
+> ⚠️ **Ne pas oublier `headers=auth_headers`** : comme `AUTH_ENABLED=true` dans les tests, tout
+> appel à une route protégée par `verify_api_key` (toutes sauf `/`, `/health`) sans cet en-tête
+> renvoie `403`, pas le code attendu par le test.
 
 ## 4. Lancer les tests
 
@@ -126,8 +129,8 @@ venv/Scripts/python.exe -m pytest -v
 ## 5. Anatomie d'un test — exemple commenté
 
 ```python
-def test_create_asset_success(client, db_session):
-    response = client.post("/assets", json=make_asset_payload())
+def test_create_asset_success(client, db_session, auth_headers):
+    response = client.post("/assets", json=make_asset_payload(), headers=auth_headers)
 
     assert response.status_code == 201
     body = response.json()
@@ -140,10 +143,10 @@ def test_create_asset_success(client, db_session):
     assert asset.eic_code == "10T-FR-BATT-01"
 ```
 
-- `client` et `db_session` sont injectés automatiquement par pytest car ce sont des noms de
-  fixtures déclarées dans `conftest.py`.
+- `client`, `db_session` et `auth_headers` sont injectés automatiquement par pytest car ce sont
+  des noms de fixtures déclarées dans `conftest.py`.
 - On appelle l'endpoint **exactement comme le ferait un vrai client HTTP** (`client.post(...)`,
-  `client.put(...)`, `client.patch(...)`), avec un corps JSON.
+  `client.put(...)`, `client.patch(...)`), avec un corps JSON et l'en-tête `X-API-Key`.
 - On vérifie deux choses séparément : la **réponse HTTP** (code + JSON) et **l'état réel en
   base** via `db_session`. C'est important car un endpoint pourrait renvoyer un 200 sans avoir
   correctement persisté les données.
@@ -175,6 +178,9 @@ make_asset_payload(name="Battery Two")        # un seul champ modifié
 make_asset_payload(eic_code="10T-FR-BATT-02")
 ```
 
+`tests/test_assets_gps_api.py` suit le même principe avec `ASSET_PAYLOAD` et une fonction
+`create_asset(client, auth_headers, **overrides)`.
+
 ## 6. Les 4 scénarios à tester pour chaque route CRUD
 
 Chaque route `POST` / `PUT` / `PATCH` de ce projet suit le même schéma de test, illustré ici
@@ -183,13 +189,14 @@ pour `PUT /assets/{asset_id}` :
 ### a) Cas de succès (200/201)
 
 ```python
-def test_replace_asset_success(client, db_session):
-    created = client.post("/assets", json=make_asset_payload()).json()
+def test_replace_asset_success(client, db_session, auth_headers):
+    created = client.post("/assets", json=make_asset_payload(), headers=auth_headers).json()
     asset_id = created["asset_id"]
 
     response = client.put(
         f"/assets/{asset_id}",
         json=make_asset_payload(name="Battery One Renamed", max_capacity_mwh=20.0),
+        headers=auth_headers,
     )
 
     assert response.status_code == 200
@@ -207,23 +214,24 @@ def test_replace_asset_success(client, db_session):
 ### b) Ressource introuvable (404)
 
 ```python
-def test_replace_asset_not_found_returns_404(client):
-    response = client.put("/assets/999999", json=make_asset_payload())
+def test_replace_asset_not_found_returns_404(client, auth_headers):
+    response = client.put("/assets/999999", json=make_asset_payload(), headers=auth_headers)
     assert response.status_code == 404
 ```
 
 ### c) Conflit métier (409) — ici, un `eic_code` déjà utilisé par un autre asset
 
 ```python
-def test_replace_asset_eic_code_conflict_returns_409(client):
-    client.post("/assets", json=make_asset_payload())  # eic_code = 10T-FR-BATT-01
+def test_replace_asset_eic_code_conflict_returns_409(client, auth_headers):
+    client.post("/assets", json=make_asset_payload(), headers=auth_headers)  # eic_code = 10T-FR-BATT-01
     second = client.post(
-        "/assets", json=make_asset_payload(eic_code="10T-FR-BATT-02", name="Battery Two")
+        "/assets", json=make_asset_payload(eic_code="10T-FR-BATT-02", name="Battery Two"), headers=auth_headers
     ).json()
 
     response = client.put(
         f"/assets/{second['asset_id']}",
         json=make_asset_payload(eic_code="10T-FR-BATT-01", name="Battery Two"),
+        headers=auth_headers,
     )
 
     assert response.status_code == 409
@@ -232,12 +240,12 @@ def test_replace_asset_eic_code_conflict_returns_409(client):
 ### d) Validation du payload (422) — champ requis manquant
 
 ```python
-def test_replace_asset_missing_field_returns_422(client):
-    created = client.post("/assets", json=make_asset_payload()).json()
+def test_replace_asset_missing_field_returns_422(client, auth_headers):
+    created = client.post("/assets", json=make_asset_payload(), headers=auth_headers).json()
     payload = make_asset_payload()
     del payload["max_charge_rate_mw"]
 
-    response = client.put(f"/assets/{created['asset_id']}", json=payload)
+    response = client.put(f"/assets/{created['asset_id']}", json=payload, headers=auth_headers)
     assert response.status_code == 422
 ```
 
@@ -251,11 +259,11 @@ Le PATCH utilise un schéma où **tous les champs sont optionnels** (`AssetPatch
 donc vérifier que les champs *non envoyés* restent inchangés :
 
 ```python
-def test_patch_asset_partial_update(client, db_session):
-    created = client.post("/assets", json=make_asset_payload()).json()
+def test_patch_asset_partial_update(client, db_session, auth_headers):
+    created = client.post("/assets", json=make_asset_payload(), headers=auth_headers).json()
     asset_id = created["asset_id"]
 
-    response = client.patch(f"/assets/{asset_id}", json={"name": "Battery One Patched"})
+    response = client.patch(f"/assets/{asset_id}", json={"name": "Battery One Patched"}, headers=auth_headers)
 
     assert response.status_code == 200
 
@@ -268,22 +276,37 @@ def test_patch_asset_partial_update(client, db_session):
 
 Et qu'un corps vide (`{}`) ne modifie rien (`test_patch_asset_empty_body_is_noop`).
 
-## 8. Ajouter un test pour une nouvelle route
+`test_assets_gps_api.py::test_patch_overwrites_gps_coordinates` applique le même principe aux
+champs GPS (`latitude`/`longitude`/`edge_id`) : puisque `POST /assets` ne fait plus d'upsert
+(voir section 8), c'est désormais un `PATCH` qui sert à corriger la position d'un asset déjà
+créé.
+
+## 8. Historique : pourquoi `POST /assets` n'est plus un upsert
+
+`POST /assets` créait auparavant un asset **ou** le mettait à jour s'il existait déjà (upsert
+basé sur `eic_code`). Cette ambiguïté a été supprimée : `POST` ne fait plus que créer (409 si le
+`eic_code` existe déjà), et toute modification passe par `PUT`/`PATCH /assets/{asset_id}`. Les
+tests qui vérifiaient l'ancien comportement d'upsert (dans `test_assets_gps_api.py`) ont été
+adaptés en conséquence.
+
+## 9. Ajouter un test pour une nouvelle route
 
 1. Créer (ou compléter) un fichier `tests/test_<ressource>.py`.
-2. Utiliser les fixtures `client` et, si besoin, `db_session` en paramètres de la fonction de
-   test — pytest les injecte automatiquement par leur nom.
-3. Si la route touche un nouveau modèle SQLAlchemy, ajouter sa table dans le `tables=[...]` de
-   `reset_db` (voir l'avertissement de la section 3) pour que la table existe dans la base de
-   test SQLite.
-4. Couvrir au minimum : le cas de succès, un cas d'erreur métier propre à la route (404/409...),
+2. Utiliser les fixtures `client`, `auth_headers` et, si besoin, `db_session` en paramètres de
+   la fonction de test — pytest les injecte automatiquement par leur nom.
+3. Couvrir au minimum : le cas de succès, un cas d'erreur métier propre à la route (404/409...),
    et un cas de validation (422) si la route accepte un body.
+4. S'assurer que la base `rada_test` existe (une seule fois, pas par test) :
+   ```bash
+   psql -U rada_user -h localhost -c "CREATE DATABASE rada_test;"
+   ```
+   `conftest.py` se charge de (re)créer les tables à chaque lancement de la suite.
 5. Lancer `python -m pytest tests/test_<ressource>.py -v` pour vérifier.
 
-## 9. Ce que ces tests ne couvrent pas
+## 10. Ce que ces tests ne couvrent pas
 
-- Le comportement réel avec **Postgres** (types spécifiques, contraintes, `SET TIME ZONE`) —
-  SQLite est une approximation pratique mais pas 100% fidèle.
-- L'authentification par clé API, désactivée ici via `AUTH_ENABLED=false`. Si un changement
-  touche `verify_api_key`, il faut le tester séparément avec `AUTH_ENABLED=true` et un client
-  qui envoie (ou omet) l'en-tête `X-API-Key`.
+- Le comportement du simulateur de télémétrie (`TELEMETRY_SIMULATOR` est forcé à `false`
+  pendant les tests).
+- Les erreurs de connexion à Postgres elles-mêmes : si `rada_test` n'existe pas ou est
+  injoignable, `conftest.py` échoue dès l'import (`database.Base.metadata.create_all`), avant
+  même de lancer un test.

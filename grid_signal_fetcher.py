@@ -1,3 +1,12 @@
+"""
+grid_signal_fetcher.py
+
+Fetches real grid signals (generation mix, renewable share) from RTE's
+(French grid operator) Actual Generation API. Requires RTE_GENERATION_*
+and RTE_BALANCING_* OAuth credentials in .env. Not wired into main.py yet
+— feeds the GridSignal model when integrated.
+"""
+
 import base64
 import requests
 import os

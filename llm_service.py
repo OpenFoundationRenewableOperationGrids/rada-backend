@@ -1,3 +1,18 @@
+"""
+llm_service.py
+
+Natural-language grid Q&A, used by POST /llm/ask in main.py. Fetches
+battery asset data from the DB and injects it into the system prompt,
+then streams the model's response back token by token via Ollama.
+
+NOTE: hardcoded to Ollama's "mistral:7b-instruct" model — not yet updated
+to use the VLLM_* settings in .env (vLLM on the Spark, per the V1.0
+architecture). fetch_battery_context() also references Asset fields
+(capacity_mwh, is_active) that don't exist on the current Asset model
+(see models.py: max_capacity_mwh, no is_active) — this will raise an
+AttributeError whenever a battery asset is fetched.
+"""
+
 import ollama
 from database import SessionLocal
 from models import Asset, AssetType

@@ -16,8 +16,8 @@ def make_asset_payload(**overrides):
 
 # --- POST /assets ---
 
-def test_create_asset_success(client, db_session):
-    response = client.post("/assets", json=make_asset_payload())
+def test_create_asset_success(client, db_session, auth_headers):
+    response = client.post("/assets", json=make_asset_payload(), headers=auth_headers)
 
     assert response.status_code == 201
     body = response.json()
@@ -30,26 +30,26 @@ def test_create_asset_success(client, db_session):
     assert asset.name == "Battery One"
 
 
-def test_create_asset_duplicate_eic_code_returns_409(client):
-    client.post("/assets", json=make_asset_payload())
-    response = client.post("/assets", json=make_asset_payload(name="Battery Two"))
+def test_create_asset_duplicate_eic_code_returns_409(client, auth_headers):
+    client.post("/assets", json=make_asset_payload(), headers=auth_headers)
+    response = client.post("/assets", json=make_asset_payload(name="Battery Two"), headers=auth_headers)
 
     assert response.status_code == 409
 
 
-def test_create_asset_missing_required_field_returns_422(client):
+def test_create_asset_missing_required_field_returns_422(client, auth_headers):
     payload = make_asset_payload()
     del payload["name"]
 
-    response = client.post("/assets", json=payload)
+    response = client.post("/assets", json=payload, headers=auth_headers)
 
     assert response.status_code == 422
 
 
 # --- PUT /assets/{asset_id} ---
 
-def test_replace_asset_success(client, db_session):
-    created = client.post("/assets", json=make_asset_payload()).json()
+def test_replace_asset_success(client, db_session, auth_headers):
+    created = client.post("/assets", json=make_asset_payload(), headers=auth_headers).json()
     asset_id = created["asset_id"]
 
     response = client.put(
@@ -59,6 +59,7 @@ def test_replace_asset_success(client, db_session):
             name="Battery One Renamed",
             max_capacity_mwh=20.0,
         ),
+        headers=auth_headers,
     )
 
     assert response.status_code == 200
@@ -72,33 +73,34 @@ def test_replace_asset_success(client, db_session):
     assert asset.max_capacity_mwh == 20.0
 
 
-def test_replace_asset_not_found_returns_404(client):
-    response = client.put("/assets/999999", json=make_asset_payload())
+def test_replace_asset_not_found_returns_404(client, auth_headers):
+    response = client.put("/assets/999999", json=make_asset_payload(), headers=auth_headers)
 
     assert response.status_code == 404
 
 
-def test_replace_asset_missing_field_returns_422(client):
-    created = client.post("/assets", json=make_asset_payload()).json()
+def test_replace_asset_missing_field_returns_422(client, auth_headers):
+    created = client.post("/assets", json=make_asset_payload(), headers=auth_headers).json()
     asset_id = created["asset_id"]
 
     payload = make_asset_payload()
     del payload["max_charge_rate_mw"]
 
-    response = client.put(f"/assets/{asset_id}", json=payload)
+    response = client.put(f"/assets/{asset_id}", json=payload, headers=auth_headers)
 
     assert response.status_code == 422
 
 
-def test_replace_asset_eic_code_conflict_returns_409(client):
-    first = client.post("/assets", json=make_asset_payload()).json()
+def test_replace_asset_eic_code_conflict_returns_409(client, auth_headers):
+    client.post("/assets", json=make_asset_payload(), headers=auth_headers)
     second = client.post(
-        "/assets", json=make_asset_payload(eic_code="10T-FR-BATT-02", name="Battery Two")
+        "/assets", json=make_asset_payload(eic_code="10T-FR-BATT-02", name="Battery Two"), headers=auth_headers
     ).json()
 
     response = client.put(
         f"/assets/{second['asset_id']}",
         json=make_asset_payload(eic_code="10T-FR-BATT-01", name="Battery Two"),
+        headers=auth_headers,
     )
 
     assert response.status_code == 409
@@ -106,11 +108,11 @@ def test_replace_asset_eic_code_conflict_returns_409(client):
 
 # --- PATCH /assets/{asset_id} ---
 
-def test_patch_asset_partial_update(client, db_session):
-    created = client.post("/assets", json=make_asset_payload()).json()
+def test_patch_asset_partial_update(client, db_session, auth_headers):
+    created = client.post("/assets", json=make_asset_payload(), headers=auth_headers).json()
     asset_id = created["asset_id"]
 
-    response = client.patch(f"/assets/{asset_id}", json={"name": "Battery One Patched"})
+    response = client.patch(f"/assets/{asset_id}", json={"name": "Battery One Patched"}, headers=auth_headers)
 
     assert response.status_code == 200
     body = response.json()
@@ -124,30 +126,30 @@ def test_patch_asset_partial_update(client, db_session):
     assert asset.eic_code == "10T-FR-BATT-01"
 
 
-def test_patch_asset_not_found_returns_404(client):
-    response = client.patch("/assets/999999", json={"name": "Nope"})
+def test_patch_asset_not_found_returns_404(client, auth_headers):
+    response = client.patch("/assets/999999", json={"name": "Nope"}, headers=auth_headers)
 
     assert response.status_code == 404
 
 
-def test_patch_asset_eic_code_conflict_returns_409(client):
-    client.post("/assets", json=make_asset_payload())
+def test_patch_asset_eic_code_conflict_returns_409(client, auth_headers):
+    client.post("/assets", json=make_asset_payload(), headers=auth_headers)
     second = client.post(
-        "/assets", json=make_asset_payload(eic_code="10T-FR-BATT-02", name="Battery Two")
+        "/assets", json=make_asset_payload(eic_code="10T-FR-BATT-02", name="Battery Two"), headers=auth_headers
     ).json()
 
     response = client.patch(
-        f"/assets/{second['asset_id']}", json={"eic_code": "10T-FR-BATT-01"}
+        f"/assets/{second['asset_id']}", json={"eic_code": "10T-FR-BATT-01"}, headers=auth_headers
     )
 
     assert response.status_code == 409
 
 
-def test_patch_asset_empty_body_is_noop(client, db_session):
-    created = client.post("/assets", json=make_asset_payload()).json()
+def test_patch_asset_empty_body_is_noop(client, db_session, auth_headers):
+    created = client.post("/assets", json=make_asset_payload(), headers=auth_headers).json()
     asset_id = created["asset_id"]
 
-    response = client.patch(f"/assets/{asset_id}", json={})
+    response = client.patch(f"/assets/{asset_id}", json={}, headers=auth_headers)
 
     assert response.status_code == 200
     db_session.expire_all()
