@@ -134,6 +134,36 @@ class AssetCreate(BaseModel):
         examples=["edge0"],
     )
 
+class AssetUpdate(BaseModel):
+    eic_code: str
+    name: str
+    asset_type: AssetType
+    max_capacity_mwh: float
+    max_charge_rate_mw: float
+    max_discharge_rate_mw: float
+    reactive_power_capacity_mvar: Optional[float] = None
+    efficiency: Optional[float] = None
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    edge_id: Optional[str] = None
+
+class AssetPatch(BaseModel):
+    eic_code: Optional[str] = None
+    name: Optional[str] = None
+    asset_type: Optional[AssetType] = None
+    max_capacity_mwh: Optional[float] = None
+    max_charge_rate_mw: Optional[float] = None
+    max_discharge_rate_mw: Optional[float] = None
+    reactive_power_capacity_mvar: Optional[float] = None
+    efficiency: Optional[float] = None
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    edge_id: Optional[str] = None
+
+class AssetActionResponse(BaseModel):
+    action: str
+    asset_id: int
+
 class TelemetryCreate(BaseModel):
     timestamp: datetime = Field(..., description="UTC timestamp of the reading.", examples=["2026-09-13T12:00:00"])
     energy_mwh: float = Field(..., description="State of charge in MWh (batteries) or 0 for solar/wind.", examples=[2.8])
@@ -182,31 +212,80 @@ def health_check():
     "/assets",
     status_code=201,
     dependencies=[Depends(verify_api_key)],
-    tags=["Assets"],
-    summary="Create or update an asset",
-    description="Upsert on `eic_code`: if an asset with the same eic_code already exists, "
-                "all its fields (including GPS coordinates and edge_id) are overwritten with "
-                "the payload's values instead of creating a duplicate.",
-    response_description="The created/updated asset's id and which action was taken.",
-    responses={201: {"content": {"application/json": {"examples": {
-        "created": {"summary": "New asset", "value": {"action": "created", "asset_id": 49}},
-        "updated": {"summary": "Existing eic_code (upsert)", "value": {"action": "updated", "asset_id": 12}},
-    }}}}},
+    response_model=AssetActionResponse,
+    tags=["assets"],
+    summary="Create a new asset",
+    description="Creates a new asset. Fails with 409 if an asset with the same eic_code already exists.",
+    responses={409: {"description": "An asset with this eic_code already exists"}},
 )
-def create_or_update_asset(payload: AssetCreate, db: Session = Depends(get_db)):
-    asset = db.query(Asset).filter(Asset.eic_code == payload.eic_code).first()
-    if asset:
-        for field, value in payload.model_dump(exclude={"eic_code"}).items():
-            setattr(asset, field, value)
-        db.commit()
-        db.refresh(asset)
-        return {"action": "updated", "asset_id": asset.id}
-    else:
-        asset = Asset(**payload.model_dump())
-        db.add(asset)
-        db.commit()
-        db.refresh(asset)
-        return {"action": "created", "asset_id": asset.id}
+def create_asset(payload: AssetCreate, db: Session = Depends(get_db)):
+    existing = db.query(Asset).filter(Asset.eic_code == payload.eic_code).first()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Asset with eic_code {payload.eic_code} already exists")
+
+    asset = Asset(**payload.model_dump())
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    return {"action": "created", "asset_id": asset.id}
+
+
+@app.put(
+    "/assets/{asset_id}",
+    dependencies=[Depends(verify_api_key)],
+    response_model=AssetActionResponse,
+    tags=["assets"],
+    summary="Fully replace an asset",
+    description="Replaces all fields of an existing asset identified by its id. All fields must be provided.",
+    responses={
+        404: {"description": "Asset not found"},
+        409: {"description": "Another asset with this eic_code already exists"},
+    },
+)
+def replace_asset(asset_id: int, payload: AssetUpdate, db: Session = Depends(get_db)):
+    asset = db.query(Asset).filter(Asset.id == asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail=f"Asset {asset_id} not found")
+
+    conflict = db.query(Asset).filter(Asset.eic_code == payload.eic_code, Asset.id != asset_id).first()
+    if conflict:
+        raise HTTPException(status_code=409, detail=f"Asset with eic_code {payload.eic_code} already exists")
+
+    for field, value in payload.model_dump().items():
+        setattr(asset, field, value)
+    db.commit()
+    db.refresh(asset)
+    return {"action": "updated", "asset_id": asset.id}
+
+
+@app.patch(
+    "/assets/{asset_id}",
+    dependencies=[Depends(verify_api_key)],
+    response_model=AssetActionResponse,
+    tags=["assets"],
+    summary="Partially update an asset",
+    description="Updates only the provided fields of an existing asset identified by its id.",
+    responses={
+        404: {"description": "Asset not found"},
+        409: {"description": "Another asset with this eic_code already exists"},
+    },
+)
+def update_asset(asset_id: int, payload: AssetPatch, db: Session = Depends(get_db)):
+    asset = db.query(Asset).filter(Asset.id == asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail=f"Asset {asset_id} not found")
+
+    updates = payload.model_dump(exclude_unset=True)
+    if "eic_code" in updates:
+        conflict = db.query(Asset).filter(Asset.eic_code == updates["eic_code"], Asset.id != asset_id).first()
+        if conflict:
+            raise HTTPException(status_code=409, detail=f"Asset with eic_code {updates['eic_code']} already exists")
+
+    for field, value in updates.items():
+        setattr(asset, field, value)
+    db.commit()
+    db.refresh(asset)
+    return {"action": "updated", "asset_id": asset.id}
 
 
 @app.post(
