@@ -9,15 +9,18 @@ Spark, via its OpenAI-compatible API (VLLM_* settings in .env).
 
 import os
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import APIError, OpenAI
 from database import SessionLocal
 from models import Asset, AssetType
 
 load_dotenv()
 
+# os.environ (not getenv): with no base_url the SDK silently falls back to
+# api.openai.com, which would send DB data to OpenAI. Fail fast instead.
 client = OpenAI(
-    base_url=os.getenv("VLLM_BASE_URL"),
+    base_url=os.environ["VLLM_BASE_URL"],
     api_key=os.getenv("VLLM_API_KEY", "not-needed"),
+    timeout=60,
 )
 MODEL = os.getenv("VLLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
 
@@ -39,7 +42,13 @@ def fetch_battery_context() -> str:
 
 
 def ask_grid_question_stream(question: str):
-    """Stream tokens from vLLM on the Spark back to FastAPI."""
+    """
+    Open a vLLM stream and return a generator of its tokens for FastAPI.
+
+    The request is sent here, before the generator is returned, so an
+    unreachable vLLM raises openai.APIError while the endpoint can still
+    return a proper error status instead of an empty 200.
+    """
     battery_data = fetch_battery_context()
 
     messages = [
@@ -63,6 +72,13 @@ def ask_grid_question_stream(question: str):
         max_tokens=1024,
     )
 
-    for chunk in stream:
-        if chunk.choices and chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+    def tokens():
+        try:
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except APIError:
+            # Headers (200) are already sent by now, so flag it in the body
+            yield "\n\n[Error: the LLM stream was interrupted]"
+
+    return tokens()

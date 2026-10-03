@@ -38,7 +38,7 @@ RADA provides:
 - **30 days of seeded historical telemetry** at 10-minute resolution, plus a **live telemetry simulator** that continues posting realistic readings every 10 minutes through the same API real assets would use
 - A **FastAPI REST backend** for querying asset reference data, current status, and historical telemetry, with **adaptive downsampling** for charting (raw 10-minute data for short ranges, `time_bucket()` aggregation for longer ones, capped at 250 points per response)
 - **API key authentication** (toggleable per environment) and CORS configured for the Next.js frontend
-- An **LLM integration** (currently Mistral via Ollama) that answers natural-language questions about the fleet by calling SQLAlchemy queries as tools — narrating live data rather than guessing from training
+- An **LLM integration** (vLLM via its OpenAI-compatible API) that answers natural-language questions about the fleet, with live battery data from the database injected into the prompt — narrating live data rather than guessing from training
 - A **production deployment** on a Hetzner VPS behind Traefik with automatic Let's Encrypt SSL, with a Next.js frontend on Vercel
 
 > **Note on naming:** the product is now branded **RADA**. The underlying repos, containers, and directories (`grid-deploy`, `grid-api`, `grid_assets.db` references, etc.) retain their original working names — this is normal and doesn't need to change for the rename to apply at the product level.
@@ -90,8 +90,7 @@ graph TB
 
     subgraph LLMLayer ["LLM Service - llm_service.py"]
         AskStream["ask_grid_question_stream"]
-        ToolDef["ASSET_TOOL - function definition"]
-        ExecQuery["execute_asset_query - SQLAlchemy"]
+        FetchCtx["fetch_battery_context - SQLAlchemy"]
     end
 
     subgraph DB ["Database Layer"]
@@ -101,7 +100,7 @@ graph TB
     end
 
     subgraph AI ["LLM Runtime"]
-        Mistral["mistral 7b-instruct via Ollama now, vLLM on home GPU server planned"]
+        VLLM["vLLM on the Spark - OpenAI-compatible API, VLLM_* settings"]
     end
 
     Client -->|HTTP| APIKey
@@ -118,24 +117,23 @@ graph TB
     Database --> TSDB
 
     LLM --> AskStream
-    AskStream -->|1. First call with tools| Mistral
-    Mistral -->|tool_calls response| AskStream
-    AskStream --> ToolDef
-    ToolDef --> ExecQuery
-    ExecQuery -->|SQLAlchemy query| Models
+    AskStream --> FetchCtx
+    FetchCtx -->|SQLAlchemy query| Models
     Models --> Database
-    AskStream -->|2. Second call with tool result| Mistral
-    Mistral -->|Streamed tokens| AskStream
+    AskStream -->|Single call, battery data in system prompt| VLLM
+    VLLM -->|Streamed tokens| AskStream
     AskStream -->|yield tokens| LLM
 ```
 
-### LLM tool-calling flow
+### LLM request flow
 
-The `/llm/ask` endpoint uses a **two-pass pattern** in `llm_service.py`:
+The `/llm/ask` endpoint uses a **single-pass pattern** in `llm_service.py`:
 
-1. The model receives the user's question along with a tool definition (`get_all_assets`). It decides whether a database lookup is needed.
-2. If it calls the tool, the service executes the corresponding SQLAlchemy query and sends the result back to the model.
-3. The model generates a final answer, streamed token-by-token back to the client via `StreamingResponse`.
+1. `fetch_battery_context()` queries all battery assets via SQLAlchemy and formats them as text.
+2. That data is injected into the system prompt, and one streaming chat-completion request is sent to vLLM through the `openai` SDK (no tool-calling round trip, so inference runs once).
+3. The answer is streamed token-by-token back to the client via `StreamingResponse`.
+
+The vLLM request is opened **before** the response starts, so if vLLM is unreachable the endpoint returns **503** rather than an empty 200. The client uses a 60s timeout. If the stream breaks midway, an `[Error: the LLM stream was interrupted]` marker is appended to the text.
 
 This means the LLM **narrates results from live data rather than guessing from training** — see [§13](#13-key-architectural-decisions--learnings) for why this matters.
 
@@ -151,7 +149,7 @@ grid-deploy/
 │                         #   — sets UTC timezone on every connection
 ├── models.py             # All SQLAlchemy ORM models
 ├── auth.py               # APIKeyHeader dependency, AUTH_ENABLED toggle
-├── llm_service.py        # Mistral/vLLM tool-calling and streaming logic
+├── llm_service.py        # vLLM (OpenAI-compatible) prompt building and streaming
 ├── simulator.py          # Telemetry simulator (SIMULATOR_INTERVAL_SEC)
 ├── seed_batteries.py      # Seeds 30 days of historical data (run inside container)
 ├── seed_solar.py
@@ -276,7 +274,7 @@ erDiagram
 | `GET` | `/assetslist` | Yes | All assets with their latest telemetry row joined |
 | `GET` | `/assets/summary` | Yes | Fleet-wide totals, broken down by asset type |
 | `GET` | `/assets/{asset_id}/soc` | Yes | Single asset — latest record (`mode=S`) or history (`mode=D`) |
-| `POST` | `/llm/ask?question=...` | Yes | Streams an LLM answer using live DB tool calling |
+| `POST` | `/llm/ask?question=...` | Yes | Streams an LLM answer using live battery data from the DB (503 if vLLM is unreachable) |
 
 > **Route ordering matters:** `/assets/summary` must be declared **before** `/assets/{asset_id}` in `main.py`, otherwise FastAPI matches `summary` as a path parameter and the summary endpoint becomes unreachable.
 
@@ -391,7 +389,7 @@ curl -X POST -H "X-API-Key: $API_KEY" \
   "https://api.candyfairstudio.com/llm/ask?question=Which+assets+are+currently+curtailed"
 ```
 
-Streams a plain-text response token by token via `StreamingResponse`.
+Streams a plain-text response token by token via `StreamingResponse`. Returns `503` if vLLM is unreachable.
 
 ---
 
@@ -425,6 +423,9 @@ Key variables:
 | `AUTH_ENABLED` | Toggles auth enforcement |
 | `ENVIRONMENT` | `development` / `production` — controls Swagger docs visibility |
 | `SIMULATOR_INTERVAL_SEC` | Interval (seconds) between simulated telemetry posts |
+| `VLLM_BASE_URL` | **Required.** vLLM's OpenAI-compatible endpoint, e.g. `http://<host>:8000/v1`. The app refuses to start without it, so prompts (which include DB data) can never fall back to `api.openai.com` |
+| `VLLM_API_KEY` | API key for vLLM, if it was started with `--api-key` (defaults to `not-needed`) |
+| `VLLM_MODEL` | Model name served by vLLM (defaults to `Qwen/Qwen2.5-7B-Instruct`) |
 | RTE OAuth2 credentials | Stored server-side for Actual Generation / Balancing Energy API calls |
 
 `.gitignore` excludes both `.env` files and any credentials.
@@ -452,7 +453,7 @@ pip install -r requirements.txt
 | `uvicorn` | ASGI server |
 | `sqlalchemy` | ORM — models and DB sessions |
 | `psycopg2` / `asyncpg` | PostgreSQL driver |
-| `ollama` | Python client for local LLM (`ollama.chat`) |
+| `openai` | OpenAI-compatible client, pointed at vLLM via `VLLM_BASE_URL` |
 | `python-dotenv` | Load environment variables from `.env` |
 
 ### Run the API locally
@@ -537,32 +538,20 @@ This means the frontend and LLM always see data arriving through the real ingest
 
 ## 11. LLM Integration — Current State & Roadmap
 
-### Current: Ollama + Mistral (local)
+### Current: vLLM via its OpenAI-compatible API
 
-```bash
-# One-time install
-curl -fsSL https://ollama.com/install.sh | sh
+`llm_service.py` uses the `openai` SDK pointed at vLLM (`VLLM_BASE_URL`, `VLLM_API_KEY`, `VLLM_MODEL` — see [§7](#7-environment-configuration)). Any OpenAI-compatible server works for local development, as long as `VLLM_BASE_URL` points at it.
 
-# Pull the correct model
-ollama pull mistral:7b-instruct
-```
+Tests never contact vLLM: `tests/test_llm_ask.py` mocks the client, and CI sets a dummy `VLLM_BASE_URL`.
 
-> **Important:** use `mistral:7b-instruct`, not `mistral:7b-instruct-q8_0`. The quantised `q8_0` variant does not support tool calling and returns HTTP 400 on `/llm/ask`.
+### Previously: Ollama + Mistral
 
-Start Ollama in a separate terminal before FastAPI:
+Earlier versions called Ollama's `mistral:7b-instruct` directly (~60–75s time-to-first-token cold on the T490's CPU). This was replaced by vLLM for its OpenAI-compatible API and much faster time-to-first-token on a GPU.
 
-```bash
-ollama serve   # http://localhost:11434
-```
+### Planned: production routing
 
-**Performance (CPU-only, T490):** ~60–75s time-to-first-token cold, ~20–30s warm.
-
-### Planned: vLLM on a dedicated home GPU server
-
-- An RTX 3090 (24GB VRAM) home server has been chosen to run inference, with **vLLM** selected over Ollama for its OpenAI-compatible API and significantly better time-to-first-token on a 24GB GPU.
-- Integration is designed to be a small change: point the `openai` SDK at vLLM's `base_url` in `llm_service.py`, rather than rewriting the tool-calling logic.
-- **Network routing:** the home server joins the existing Tailscale mesh; Traefik on the VPS proxies inference requests through the tunnel to vLLM. This keeps GPU workloads entirely off the VPS's 4GB RAM.
-- This component is **not yet active in production** — pending home server setup.
+- **Network routing:** the GPU host joins the existing Tailscale mesh; Traefik on the VPS proxies inference requests through the tunnel to vLLM. This keeps GPU workloads entirely off the VPS's 4GB RAM.
+- This component is **not yet active in production**.
 
 ---
 
@@ -609,4 +598,4 @@ Frontend documentation is maintained separately by Candy, with cross-references 
 
 ---
 
-*RADA · FastAPI · SQLAlchemy · PostgreSQL + TimescaleDB · Mistral/Ollama (-> vLLM) · Docker · Traefik · Next.js · Python*
+*RADA · FastAPI · SQLAlchemy · PostgreSQL + TimescaleDB · vLLM · Docker · Traefik · Next.js · Python*

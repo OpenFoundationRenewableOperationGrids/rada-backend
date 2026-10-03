@@ -14,6 +14,7 @@ from fastapi import FastAPI, Depends, Query, Path, HTTPException, Security
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from openai import APIError
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 from pydantic import BaseModel, Field
@@ -724,10 +725,14 @@ def get_asset_soc(
     description="Streams back a plain-text answer from the LLM, with live battery asset "
                 "data from the database injected into its system prompt.",
     response_description="A streaming plain-text response, token by token.",
-    responses={200: {"content": {"text/plain": {"example": "The Tesla Megapack 2 XL - Unit 01 is currently at 3.8 MWh (95% of its 4.0 MWh capacity) and discharging at 1.45 MW."}}}},
+    responses={
+        200: {"content": {"text/plain": {"example": "The Tesla Megapack 2 XL - Unit 01 is currently at 3.8 MWh (95% of its 4.0 MWh capacity) and discharging at 1.45 MW."}}},
+        503: {"description": "The LLM (vLLM) is unreachable or returned an error."},
+    },
 )
 def ask_llm(question: str = Query(..., description="Natural-language question about the grid/assets.", examples=["What's the current state of charge of the Tesla Megapack units?"])):
-    return StreamingResponse(
-        ask_grid_question_stream(question),
-        media_type="text/plain"
-    )
+    try:
+        tokens = ask_grid_question_stream(question)
+    except APIError:
+        raise HTTPException(status_code=503, detail="LLM service unavailable")
+    return StreamingResponse(tokens, media_type="text/plain")
