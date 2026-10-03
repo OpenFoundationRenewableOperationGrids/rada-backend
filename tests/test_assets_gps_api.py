@@ -3,7 +3,7 @@ test_assets_gps_api.py
 
 Integration tests for GPS/edge_id support on the assets endpoints —
 covers the same scenarios validated manually via /docs during Task 1:
-creation, retrieval, upsert behavior, and bounds validation.
+creation, retrieval, updating (PATCH), and bounds validation.
 """
 
 ASSET_PAYLOAD = {
@@ -78,14 +78,20 @@ def test_soc_summary_returns_gps_fields(client, auth_headers):
     assert body["edge_id"] == "edge0"
 
 
-def test_upsert_overwrites_gps_coordinates(client, auth_headers):
+def test_patch_overwrites_gps_coordinates(client, auth_headers):
+    # POST /assets is create-only (see test_assets_crud.py); overwriting an
+    # existing asset's GPS coordinates now goes through PATCH.
     first = create_asset(client, auth_headers)
     assert first.json()["action"] == "created"
     asset_id = first.json()["asset_id"]
     add_telemetry(client, auth_headers, asset_id)
 
-    second = create_asset(client, auth_headers, latitude=43.2965, longitude=5.3698, edge_id="edge1")
-    assert second.status_code == 201
+    second = client.patch(
+        f"/assets/{asset_id}",
+        json={"latitude": 43.2965, "longitude": 5.3698, "edge_id": "edge1"},
+        headers=auth_headers,
+    )
+    assert second.status_code == 200
     assert second.json()["action"] == "updated"
     assert second.json()["asset_id"] == asset_id
 
@@ -94,6 +100,14 @@ def test_upsert_overwrites_gps_coordinates(client, auth_headers):
     assert body["latitude"] == 43.2965
     assert body["longitude"] == 5.3698
     assert body["edge_id"] == "edge1"
+
+
+def test_create_asset_with_duplicate_eic_code_is_rejected(client, auth_headers):
+    first = create_asset(client, auth_headers)
+    assert first.json()["action"] == "created"
+
+    second = create_asset(client, auth_headers, latitude=43.2965, longitude=5.3698, edge_id="edge1")
+    assert second.status_code == 409
 
 
 def test_missing_api_key_is_rejected(client):
