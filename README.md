@@ -57,7 +57,7 @@ graph TD
     API["grid-api container - FastAPI"]
     DB["TimescaleDB container - /opt/database/"]
     TS{Tailscale mesh}
-    Home["Home server (planned) - RTX 3090 - vLLM"]
+    Home["vLLM server (planned) - GPU inference"]
 
     User --> FE
     FE -->|HTTPS, X-API-Key| Traefik
@@ -100,7 +100,7 @@ graph TB
     end
 
     subgraph AI ["LLM Runtime"]
-        VLLM["vLLM on the Spark - OpenAI-compatible API, VLLM_* settings"]
+        VLLM["vLLM server - OpenAI-compatible API, VLLM_* settings"]
     end
 
     Client -->|HTTP| APIKey
@@ -550,7 +550,7 @@ Earlier versions called Ollama's `mistral:7b-instruct` directly (~60–75s time-
 
 ### Planned: production routing
 
-- **Network routing:** the GPU host joins the existing Tailscale mesh; Traefik on the VPS proxies inference requests through the tunnel to vLLM. This keeps GPU workloads entirely off the VPS's 4GB RAM.
+- **Network routing:** the vLLM server joins the existing Tailscale mesh; Traefik on the VPS proxies inference requests through the tunnel to vLLM. This keeps GPU workloads entirely off the VPS's 4GB RAM.
 - This component is **not yet active in production**.
 
 ---
@@ -583,14 +583,14 @@ Frontend documentation is maintained separately by Candy, with cross-references 
 - **ARM64 vs amd64.** The VPS is ARM64 — Docker images must be built natively on it.
 - **Tailscale/DNS conflict.** Tailscale can hijack `/etc/resolv.conf`; fix via `daemon.json` with `8.8.8.8`.
 - **FastAPI route ordering.** More specific routes (`/assets/summary`) must be declared before parameterised routes (`/assets/{asset_id}`).
-- **vLLM over Ollama** for production inference, once GPU hardware is available — OpenAI-compatible API and much lower time-to-first-token on 24GB VRAM.
+- **vLLM over Ollama** for production inference, once GPU hardware is available — OpenAI-compatible API and much lower time-to-first-token on a GPU.
 
 ---
 
 ## 14. Roadmap — On the Horizon
 
-- [ ] **vLLM inference on the home server** — RTX 3090, integrated via the `openai` SDK pointed at vLLM's `base_url`
-- [ ] **Tailscale routing for LLM traffic** — Traefik on the VPS proxying through the tailnet to vLLM on the home server
+- [ ] **vLLM server in production** — integrated via the `openai` SDK pointed at vLLM's `base_url`
+- [ ] **Tailscale routing for LLM traffic** — Traefik on the VPS proxying through the tailnet to the vLLM server
 - [ ] **GitHub Actions CI/CD** — automatic deploy on push (not yet implemented)
 - [ ] **Architecture & installation documentation** — DB and backend as separate containers; frontend docs handled separately by Candy
 - [ ] **Schema enrichment** — `ambient_temperature_c`, `panel_temperature_c`, `irradiance_w_m2`, `cell_temperature_c`, deferred until the frontend can render them

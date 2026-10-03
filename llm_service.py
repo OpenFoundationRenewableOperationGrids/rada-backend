@@ -3,8 +3,8 @@ llm_service.py
 
 Natural-language grid Q&A, used by POST /llm/ask in main.py. Fetches
 battery asset data from the DB and injects it into the system prompt,
-then streams the model's response back token by token from vLLM on the
-Spark, via its OpenAI-compatible API (VLLM_* settings in .env).
+then streams the model's response back token by token from a vLLM
+server, via its OpenAI-compatible API (VLLM_* settings in .env).
 """
 
 import os
