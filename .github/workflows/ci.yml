@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: rada
+          POSTGRES_PASSWORD: rada
+          POSTGRES_DB: rada_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U rada"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # conftest.py swaps the db name for rada_test
+      DATABASE_URL: postgresql://rada:rada@localhost:5432/rada_dev
+      # Dummy endpoint: llm_service is imported by main.py, never called in tests
+      VLLM_BASE_URL: http://localhost:9/v1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # same as Dockerfile
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: pip check
+      - run: pytest -v
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t rada-backend:ci .
