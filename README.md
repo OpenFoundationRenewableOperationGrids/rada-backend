@@ -158,7 +158,7 @@ grid-deploy/
 ├── .env.production        # VPS environment config (AUTH_ENABLED=true)
 ├── Dockerfile
 ├── requirements.txt
-└── venv/                  # Virtual environment (not committed to git)
+└── .venv/                 # Virtual environment (not committed to git)
 ```
 
 > ⚠️ **Check against current code:** the database/auth/simulator layer has changed significantly since this README was first written (SQLite → PostgreSQL/TimescaleDB, plus auth and CORS additions). The filenames above reflect the architecture described in our working notes — confirm exact filenames against the current `grid-deploy` repo and adjust if they've diverged.
@@ -438,7 +438,7 @@ Key variables:
 
 **Linux / macOS:**
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
 ### Install or update dependencies
