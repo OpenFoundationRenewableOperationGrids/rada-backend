@@ -434,12 +434,31 @@ Key variables:
 
 ## 8. Local Development Setup
 
-### Activate the virtual environment
+### Create and activate the virtual environment
 
-**Linux / macOS:**
+The project uses a virtual environment in `.venv/` (git-ignored). Create it once, then activate it in every new terminal.
+
+**Linux:**
 ```bash
+python3 -m venv .venv
 source .venv/bin/activate
 ```
+
+**macOS:**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+**Windows (PowerShell):**
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+```
+
+> If PowerShell blocks the script, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once. From **Command Prompt** use `.venv\Scripts\activate.bat`; from **Git Bash** use `source .venv/Scripts/activate`.
+
+Once activated, `python`, `pip`, `uvicorn` and `python -m pytest` all use the project's environment on every OS. Run `deactivate` to leave it.
 
 ### Install or update dependencies
 

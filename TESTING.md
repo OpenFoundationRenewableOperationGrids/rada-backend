@@ -120,10 +120,21 @@ python -m pytest tests/test_assets_crud.py
 python -m pytest tests/test_assets_crud.py::test_create_asset_success -v
 ```
 
-Sous Windows avec l'environnement virtuel du projet :
+Sans activer l'environnement virtuel du projet (`.venv/`), on peut appeler son Python directement :
 
 ```bash
-venv/Scripts/python.exe -m pytest -v
+# Linux / macOS
+.venv/bin/python -m pytest -v
+```
+
+```powershell
+# Windows (PowerShell ou Invite de commandes)
+.venv\Scripts\python.exe -m pytest -v
+```
+
+```bash
+# Windows (Git Bash)
+.venv/Scripts/python.exe -m pytest -v
 ```
 
 ## 5. Anatomie d'un test — exemple commenté
