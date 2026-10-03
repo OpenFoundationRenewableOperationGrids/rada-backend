@@ -411,7 +411,7 @@ Two environment files, loaded via `python-dotenv`:
 
 | File | Used by | Purpose |
 |---|---|---|
-| `.env` | Local development (T490) | `AUTH_ENABLED=false`, local DB connection string, `ENVIRONMENT=development` |
+| `.env` | Local development | `AUTH_ENABLED=false`, local DB connection string, `ENVIRONMENT=development` |
 | `.env.production` | VPS (`/var/www/`) | `AUTH_ENABLED=true`, production DB connection string, `ENVIRONMENT=production`, `SIMULATOR_INTERVAL_SEC`, `API_KEY` |
 
 Key variables:
@@ -436,7 +436,7 @@ Key variables:
 
 ### Activate the virtual environment
 
-**Linux (T490, Kali Linux):**
+**Linux / macOS:**
 ```bash
 source venv/bin/activate
 ```
@@ -488,7 +488,7 @@ To stop the API container:
 sudo docker compose -f /var/www/docker-compose.yml stop grid-api
 ```
 
-> **ARM64 vs amd64:** the VPS is ARM64. Docker images must be **built natively on the VPS** — images built on the T490 (amd64) cannot be transferred. `docker build --no-cache` is the established pattern to avoid stale layer caching on rebuild.
+> **ARM64 vs amd64:** the VPS is ARM64. Docker images must be **built natively on the VPS** — images built on an amd64 development machine cannot be transferred. `docker build --no-cache` is the established pattern to avoid stale layer caching on rebuild.
 
 ### Seeding in production
 
@@ -546,7 +546,7 @@ Tests never contact vLLM: `tests/test_llm_ask.py` mocks the client, and CI sets 
 
 ### Previously: Ollama + Mistral
 
-Earlier versions called Ollama's `mistral:7b-instruct` directly (~60–75s time-to-first-token cold on the T490's CPU). This was replaced by vLLM for its OpenAI-compatible API and much faster time-to-first-token on a GPU.
+Earlier versions called Ollama's `mistral:7b-instruct` directly (~60–75s time-to-first-token cold on a CPU-only laptop). This was replaced by vLLM for its OpenAI-compatible API and much faster time-to-first-token on a GPU.
 
 ### Planned: production routing
 
