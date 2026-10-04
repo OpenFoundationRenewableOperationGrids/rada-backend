@@ -6,6 +6,7 @@ on:
   push:
     branches: [develop, main]
 
+# Cancel a previous run on the same branch when new commits are pushed
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -14,8 +15,24 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"   # same as Dockerfile
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: pip check
+      - run: ruff check --output-format=github .
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     services:
       postgres:
         image: timescale/timescaledb:latest-pg16
@@ -33,17 +50,18 @@ jobs:
       # Dummy endpoint: llm_service is imported by main.py, never called in tests
       VLLM_BASE_URL: http://localhost:9/v1
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"   # same as Dockerfile
           cache: pip
       - run: pip install -r requirements.txt
-      - run: pip check
       - run: python -m pytest -v   # as in TESTING.md: puts repo root on sys.path
 
   docker-build:
+    name: Docker build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker build -t rada-backend:ci .

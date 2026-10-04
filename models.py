@@ -6,7 +6,7 @@ solar and wind farms), their StateOfCharge/telemetry history, grid-wide
 GridSignal readings, and DispatchCommand records sent to assets.
 """
 
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 

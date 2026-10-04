@@ -19,7 +19,7 @@ git clone https://github.com/OpenFoundationRenewableOperationGrids/rada-backend.
 cd rada-backend
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: see the README
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # app, tests and Ruff
 cp .env.example .env               # then fill in DATABASE_URL and VLLM_BASE_URL
 uvicorn main:app --reload
 ```
@@ -43,11 +43,14 @@ fix(llm): return 503 when the vLLM server is unreachable
 
 Keep each commit focused on one change.
 
+Pull requests are **squash-merged**: the pull request title becomes the commit on `develop`, so CI checks that it follows the same format.
+
 ## Checks
 
-CI runs these on every pull request, and all of them must pass:
+CI runs these on every pull request, and all of them must pass before merging. A maintainer also has to approve the pull request.
 
 ```bash
+ruff check .              # lint (Ruff, configured in ruff.toml)
 pip check                 # no conflicting dependencies
 python -m pytest -v       # API tests, against a real PostgreSQL database
 docker build -t rada-backend .

@@ -147,26 +147,28 @@ This means the LLM **narrates results from live data rather than guessing from t
 ## 3. File Structure
 
 ```
-grid-deploy/
+rada-backend/
 │
-├── main.py              # FastAPI app — routes, CORS, dependency injection
-├── database.py          # PostgreSQL/TimescaleDB engine, SessionLocal, Base, get_db()
-│                         #   — sets UTC timezone on every connection
-├── models.py             # All SQLAlchemy ORM models
-├── auth.py               # APIKeyHeader dependency, AUTH_ENABLED toggle
-├── llm_service.py        # vLLM (OpenAI-compatible) prompt building and streaming
-├── simulator.py          # Telemetry simulator (SIMULATOR_INTERVAL_SEC)
-├── seed_batteries.py      # Seeds 30 days of historical data (run inside container)
-├── seed_solar.py
-├── seed_wind.py
-├── .env                  # Local environment config (AUTH_ENABLED=false)
-├── .env.production        # VPS environment config (AUTH_ENABLED=true)
+├── main.py                 # FastAPI app — routes, CORS, API key auth (verify_api_key), lifespan
+├── database.py             # PostgreSQL/TimescaleDB engine, SessionLocal, Base, get_db()
+│                           #   — sets UTC timezone on every connection
+├── models.py               # All SQLAlchemy ORM models
+├── llm_service.py          # vLLM (OpenAI-compatible) prompt building and streaming
+├── telemetry_simulator.py  # Telemetry simulator, started from main.py (TELEMETRY_SIMULATOR)
+├── seed_batteries.py       # Drops the tables and seeds 30 days of history for batteries,
+│                           #   solar and wind farms (run inside the container)
+├── grid_signal_fetcher.py  # RTE grid signals — not wired into main.py yet
+├── create_tables.py        # Creates missing tables, without touching existing ones
+├── tests/                  # pytest suite (see TESTING.md)
 ├── Dockerfile
-├── requirements.txt
-└── .venv/                 # Virtual environment (not committed to git)
+├── requirements.txt        # Runtime and test dependencies
+├── requirements-dev.txt    # + development tools (Ruff)
+├── ruff.toml               # Lint configuration
+├── .env.example            # Every environment variable, with placeholders
+├── .env                    # Local config (not committed)
+├── .env.production         # VPS config (not committed)
+└── .venv/                  # Virtual environment (not committed)
 ```
-
-> ⚠️ **Check against current code:** the database/auth/simulator layer has changed significantly since this README was first written (SQLite → PostgreSQL/TimescaleDB, plus auth and CORS additions). The filenames above reflect the architecture described in our working notes — confirm exact filenames against the current `grid-deploy` repo and adjust if they've diverged.
 
 ---
 
@@ -468,7 +470,8 @@ Once activated, `python`, `pip`, `uvicorn` and `python -m pytest` all use the pr
 ### Install or update dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt       # the app and its tests
+pip install -r requirements-dev.txt   # the same, plus the Ruff linter
 ```
 
 | Package | Purpose |

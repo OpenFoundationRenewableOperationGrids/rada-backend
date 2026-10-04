@@ -13,6 +13,6 @@
 ## Checklist
 
 - [ ] The pull request targets `develop`
-- [ ] `python -m pytest` passes
+- [ ] `ruff check .` and `python -m pytest` pass
 - [ ] New behaviour or bug fixes come with tests
 - [ ] The README is updated if a route, a model or an environment variable changed
