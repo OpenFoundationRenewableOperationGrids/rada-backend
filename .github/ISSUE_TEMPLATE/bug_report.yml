@@ -1,0 +1,48 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! For a security issue, please follow [SECURITY.md](https://github.com/OpenFoundationRenewableOperationGrids/rada-backend/blob/develop/SECURITY.md) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The request you sent (route, parameters, body) and the response you got.
+      placeholder: |
+        1. GET /assets/42/soc?mode=D&from_ts=...
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Where does it happen?
+      multiple: true
+      options:
+        - Local development
+        - Docker
+        - Staging
+        - Production
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      placeholder: e.g. develop at ca14311
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste the traceback or server logs. Remove any API key, database URL or personal data first.
+      render: shell

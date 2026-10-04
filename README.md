@@ -3,9 +3,12 @@
 *Grid-scale renewable energy asset monitoring and AI analytics platform*
 *(previously developed under the working name "BESS Grid Manager")*
 
+[![CI](https://github.com/OpenFoundationRenewableOperationGrids/rada-backend/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/OpenFoundationRenewableOperationGrids/rada-backend/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
 RADA is a grid-scale monitoring and analytics platform for renewable energy fleets — batteries (BESS), solar farms, and wind farms. It maintains a registry of assets identified by ENTSO-E EIC codes, ingests 10-minute telemetry into a PostgreSQL/TimescaleDB database, exposes a FastAPI REST API with adaptive time-series downsampling, and answers natural-language questions about the fleet via a locally-running LLM with live database access. 
 
-This is built as the backend counterpart to the **[RADA frontend](https://github.com/candyfair/rada-frontend)** developed by [Candice Fairand](https://github.com/Candyfair).
+This is built as the backend counterpart to the **[RADA frontend](https://github.com/OpenFoundationRenewableOperationGrids/rada-frontend)** developed by [Candice Fairand](https://github.com/Candyfair), and is part of the [Open Foundation for Renewable Operation Grids](https://github.com/OpenFoundationRenewableOperationGrids).
 
 Units throughout are **MW** (power), **MWh** (energy), and **MVAr** (reactive power), consistent with grid-scale industry standards.
 
@@ -27,6 +30,8 @@ Units throughout are **MW** (power), **MWh** (energy), and **MVAr** (reactive po
 12. [Frontend](#12-frontend)
 13. [Key Architectural Decisions & Learnings](#13-key-architectural-decisions--learnings)
 14. [Roadmap — On the Horizon](#14-roadmap--on-the-horizon)
+15. [Contributing](#15-contributing)
+16. [License](#16-license)
 
 ---
 
@@ -407,7 +412,7 @@ Streams a plain-text response token by token via `StreamingResponse`. Returns `5
 
 ## 7. Environment Configuration
 
-Two environment files, loaded via `python-dotenv`:
+Two environment files, loaded via `python-dotenv`. Start from [`.env.example`](.env.example), which lists every variable:
 
 | File | Used by | Purpose |
 |---|---|---|
@@ -474,6 +479,14 @@ pip install -r requirements.txt
 | `psycopg2` / `asyncpg` | PostgreSQL driver |
 | `openai` | OpenAI-compatible client, pointed at vLLM via `VLLM_BASE_URL` |
 | `python-dotenv` | Load environment variables from `.env` |
+
+### Configure the environment
+
+```bash
+cp .env.example .env
+```
+
+Then set at least `DATABASE_URL` and `VLLM_BASE_URL` (see [Environment Configuration](#7-environment-configuration)).
 
 ### Run the API locally
 
@@ -578,7 +591,7 @@ Earlier versions called Ollama's `mistral:7b-instruct` directly (~60–75s time-
 
 The frontend is developed by [@Candyfair](https://github.com/Candyfair) (Candy) as a separate Next.js application, hosted on Vercel:
 
-**[Candyfair/grid-asset-manager-frontend](https://github.com/Candyfair/grid-asset-manager-frontend)**
+**[OpenFoundationRenewableOperationGrids/rada-frontend](https://github.com/OpenFoundationRenewableOperationGrids/rada-frontend)**
 
 Frontend responsibilities include:
 
@@ -588,7 +601,7 @@ Frontend responsibilities include:
 - Light and dark mode
 - Converting UTC timestamps from the API to `Europe/Paris` for display
 
-Frontend documentation is maintained separately by Candy, with cross-references back to this backend README where relevant.
+Frontend documentation is maintained in the [rada-frontend README](https://github.com/OpenFoundationRenewableOperationGrids/rada-frontend#readme), with cross-references back to this backend README where relevant.
 
 ---
 
@@ -610,10 +623,26 @@ Frontend documentation is maintained separately by Candy, with cross-references 
 
 - [ ] **vLLM server in production** — integrated via the `openai` SDK pointed at vLLM's `base_url`
 - [ ] **Tailscale routing for LLM traffic** — Traefik on the VPS proxying through the tailnet to the vLLM server
-- [ ] **GitHub Actions CI/CD** — automatic deploy on push (not yet implemented)
+- [ ] **Continuous deployment** — automatic deploy on push (CI already runs the tests and the Docker build on every pull request)
 - [ ] **Architecture & installation documentation** — DB and backend as separate containers; frontend docs handled separately by Candy
 - [ ] **Schema enrichment** — `ambient_temperature_c`, `panel_temperature_c`, `irradiance_w_m2`, `cell_temperature_c`, deferred until the frontend can render them
 - [ ] **Headscale** — self-hosted Tailscale coordination server, deployable on the existing VPS once the stack is stable
+
+---
+
+## 15. Contributing
+
+Contributions are welcome! Read [CONTRIBUTING.md](CONTRIBUTING.md) to get started, and [TESTING.md](TESTING.md) to write tests. Pull requests target `develop`.
+
+To report a security issue, follow [SECURITY.md](SECURITY.md) — please don't open a public issue.
+
+---
+
+## 16. License
+
+Copyright 2026 openfrog.org
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
 
 ---
 
