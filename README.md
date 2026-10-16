@@ -159,13 +159,14 @@ rada-backend/
 │                           #   solar and wind farms (run inside the container)
 ├── grid_signal_fetcher.py  # RTE grid signals — not wired into main.py yet
 ├── create_tables.py        # Creates missing tables, without touching existing ones
+├── migrations/             # SQL migrations for existing databases (see §9)
 ├── tests/                  # pytest suite (see TESTING.md)
 ├── .github/workflows/      # CI (lint, tests, Docker build), PR title check,
 │                           #   on-demand Claude review (claude-review.yml)
 ├── REVIEW.md               # Rules for the automated Claude review
 ├── Dockerfile
-├── requirements.txt        # Runtime and test dependencies
-├── requirements-dev.txt    # + development tools (Ruff)
+├── requirements.txt        # Runtime dependencies (installed in the Docker image)
+├── requirements-dev.txt    # + test and development tools (pytest, Ruff)
 ├── ruff.toml               # Lint configuration
 ├── .env.example            # Every environment variable, with placeholders
 ├── .env                    # Local config (not committed)
@@ -473,8 +474,8 @@ Once activated, `python`, `pip`, `uvicorn` and `python -m pytest` all use the pr
 ### Install or update dependencies
 
 ```bash
-pip install -r requirements.txt       # the app and its tests
-pip install -r requirements-dev.txt   # the same, plus the Ruff linter
+pip install -r requirements.txt       # the app only (what the Docker image installs)
+pip install -r requirements-dev.txt   # the same, plus pytest and Ruff — needed to run the tests
 ```
 
 | Package | Purpose |
@@ -511,6 +512,24 @@ http://127.0.0.1:8000/docs
 ## 9. Production Deployment
 
 The VPS (Hetzner CAX11, **ARM64**, Ubuntu) runs Docker Compose at `/var/www/docker-compose.yml` (project name `www`, network `www_cb_network`). TimescaleDB runs in its **own container** at `/opt/database/`, separate from the API container.
+
+### Upgrading an existing database
+
+`Base.metadata.create_all()` (run at startup and by `create_tables.py`) only creates **missing tables** — it never adds or alters columns on a table that already exists. When a release changes an existing model, run its SQL file from `migrations/` on the existing database **before** deploying the new API image. The files are idempotent, so running one twice is harmless.
+
+```bash
+# Production: TimescaleDB runs in its own container
+docker exec -i <db_container> psql -U <db_user> -d <db_name> < migrations/001_assets_gps_edge.sql
+
+# Local development
+psql "$DATABASE_URL" -f migrations/001_assets_gps_edge.sql
+```
+
+| File | Change |
+|---|---|
+| `001_assets_gps_edge.sql` | Adds `latitude`, `longitude` and `edge_id` to `assets` |
+
+> Alembic is planned to replace these hand-written files with versioned migrations.
 
 ### Standard deploy sequence
 

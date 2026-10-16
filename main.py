@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from openai import APIError
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timedelta
@@ -105,8 +106,8 @@ def get_db():
 class AssetCreate(BaseModel):
     eic_code: str = Field(
         ...,
-        description="ENTSO-E EIC code identifying the asset. Used as the upsert key — "
-                    "posting an existing eic_code updates that asset instead of creating a new one.",
+        description="ENTSO-E EIC code identifying the asset. Must be unique — "
+                    "posting an existing eic_code returns 409 (use PUT/PATCH to update).",
         examples=["17W-TM2XL-001---X"],
     )
     name: str = Field(..., description="Human-readable asset name.", examples=["Tesla Megapack 2 XL - Unit 01"])
@@ -147,6 +148,11 @@ class AssetUpdate(BaseModel):
     latitude: Optional[float] = Field(None, ge=-90, le=90)
     longitude: Optional[float] = Field(None, ge=-180, le=180)
     edge_id: Optional[str] = None
+
+# NOT NULL columns of Asset (except the primary key) — a PATCH may not set them to null
+NON_NULLABLE_ASSET_FIELDS = {
+    c.name for c in Asset.__table__.columns if not c.nullable and not c.primary_key
+}
 
 class AssetPatch(BaseModel):
     eic_code: Optional[str] = None
@@ -214,7 +220,7 @@ def health_check():
     status_code=201,
     dependencies=[Depends(verify_api_key)],
     response_model=AssetActionResponse,
-    tags=["assets"],
+    tags=["Assets"],
     summary="Create a new asset",
     description="Creates a new asset. Fails with 409 if an asset with the same eic_code already exists.",
     responses={409: {"description": "An asset with this eic_code already exists"}},
@@ -226,7 +232,12 @@ def create_asset(payload: AssetCreate, db: Session = Depends(get_db)):
 
     asset = Asset(**payload.model_dump())
     db.add(asset)
-    db.commit()
+    # The pre-check above can race with a concurrent insert — the unique constraint has the last word
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=f"Asset with eic_code {payload.eic_code} already exists")
     db.refresh(asset)
     return {"action": "created", "asset_id": asset.id}
 
@@ -235,7 +246,7 @@ def create_asset(payload: AssetCreate, db: Session = Depends(get_db)):
     "/assets/{asset_id}",
     dependencies=[Depends(verify_api_key)],
     response_model=AssetActionResponse,
-    tags=["assets"],
+    tags=["Assets"],
     summary="Fully replace an asset",
     description="Replaces all fields of an existing asset identified by its id. All fields must be provided.",
     responses={
@@ -254,7 +265,11 @@ def replace_asset(asset_id: int, payload: AssetUpdate, db: Session = Depends(get
 
     for field, value in payload.model_dump().items():
         setattr(asset, field, value)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=f"Asset with eic_code {payload.eic_code} already exists")
     db.refresh(asset)
     return {"action": "updated", "asset_id": asset.id}
 
@@ -263,7 +278,7 @@ def replace_asset(asset_id: int, payload: AssetUpdate, db: Session = Depends(get
     "/assets/{asset_id}",
     dependencies=[Depends(verify_api_key)],
     response_model=AssetActionResponse,
-    tags=["assets"],
+    tags=["Assets"],
     summary="Partially update an asset",
     description="Updates only the provided fields of an existing asset identified by its id.",
     responses={
@@ -277,6 +292,11 @@ def update_asset(asset_id: int, payload: AssetPatch, db: Session = Depends(get_d
         raise HTTPException(status_code=404, detail=f"Asset {asset_id} not found")
 
     updates = payload.model_dump(exclude_unset=True)
+    # exclude_unset keeps an explicit null — reject it for NOT NULL columns instead of failing on commit
+    null_fields = sorted(f for f, v in updates.items() if v is None and f in NON_NULLABLE_ASSET_FIELDS)
+    if null_fields:
+        raise HTTPException(status_code=422, detail=f"Fields cannot be null: {', '.join(null_fields)}")
+
     if "eic_code" in updates:
         conflict = db.query(Asset).filter(Asset.eic_code == updates["eic_code"], Asset.id != asset_id).first()
         if conflict:
@@ -284,7 +304,11 @@ def update_asset(asset_id: int, payload: AssetPatch, db: Session = Depends(get_d
 
     for field, value in updates.items():
         setattr(asset, field, value)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=f"Asset with eic_code {updates.get('eic_code')} already exists")
     db.refresh(asset)
     return {"action": "updated", "asset_id": asset.id}
 
