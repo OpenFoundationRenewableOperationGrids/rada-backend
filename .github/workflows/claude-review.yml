@@ -17,8 +17,11 @@ concurrency:
 jobs:
   review:
     name: Claude review
-    # Only top-level comments on a pull request (not an issue) starting with the command
+    # Only top-level comments on a pull request (not an issue) starting with the
+    # command, posted by one of the two admins whose Claude accounts and tokens
+    # are used. Edit this list to change who can start a review.
     if: >-
+      contains(fromJSON('["Candyfair", "roadtowiganpier"]'), github.event.comment.user.login) &&
       github.event.issue.pull_request &&
       github.event.issue.state == 'open' &&
       startsWith(github.event.comment.body, '@claude review')
@@ -36,8 +39,8 @@ jobs:
         with:
           fetch-depth: 1
 
-      # The action rejects commenters without write access to the repository,
-      # so external contributors cannot start a review (and spend the quota)
+      # As a second safeguard, the action itself rejects commenters without
+      # write access to the repository
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
