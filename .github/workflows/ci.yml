@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+# Cancel a previous run on the same branch when new commits are pushed
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"   # same as Dockerfile
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: pip check
+      - run: ruff check --output-format=github .
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: rada
+          POSTGRES_PASSWORD: rada
+          POSTGRES_DB: rada_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U rada"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # conftest.py swaps the db name for rada_test
+      DATABASE_URL: postgresql://rada:rada@localhost:5432/rada_dev
+      # Dummy endpoint: llm_service is imported by main.py, never called in tests
+      VLLM_BASE_URL: http://localhost:9/v1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"   # same as Dockerfile
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -v   # as in TESTING.md: puts repo root on sys.path
+
+  docker-build:
+    name: Docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t rada-backend:ci .

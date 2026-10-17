@@ -1,3 +1,11 @@
+"""
+database.py
+
+Database engine and session setup — reads DATABASE_URL from .env,
+configures the SQLAlchemy engine/session for a PostgreSQL + TimescaleDB
+backend, and forces the connection timezone to UTC.
+"""
+
 import os
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, event

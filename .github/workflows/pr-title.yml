@@ -1,0 +1,30 @@
+name: PR title
+
+# Pull requests are squash-merged, so their title becomes the commit
+# message on develop: it must follow Conventional Commits
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  conventional-commit:
+    name: Conventional Commits title
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check the title
+        env:
+          # Through an env var, never interpolated in the script
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|docs|test|chore|refactor|perf|ci|build|style|revert|release)(\([a-z0-9._/-]+\))?!?: [^ ].+$'
+          if [[ "$TITLE" =~ $pattern ]]; then
+            echo "OK: $TITLE"
+          else
+            echo "::error::The title must follow Conventional Commits, e.g. \"fix(assets): return 404 for an unknown id\". Got: $TITLE"
+            echo "Allowed types: feat, fix, docs, test, chore, refactor, perf, ci, build, style, revert, release"
+            exit 1
+          fi
