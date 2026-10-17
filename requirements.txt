@@ -22,4 +22,3 @@ typing_extensions==4.15.0
 urllib3==2.8.0
 uvicorn==0.40.0
 openai==3.5.0
-pytest==9.1.1

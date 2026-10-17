@@ -1,3 +1,6 @@
+import pytest
+from sqlalchemy.orm import Query
+
 from models import Asset
 
 
@@ -155,3 +158,62 @@ def test_patch_asset_empty_body_is_noop(client, db_session, auth_headers):
     db_session.expire_all()
     asset = db_session.query(Asset).filter(Asset.id == asset_id).first()
     assert asset.name == "Battery One"
+
+
+def test_patch_asset_null_on_non_nullable_field_returns_422(client, db_session, auth_headers):
+    created = client.post("/assets", json=make_asset_payload(), headers=auth_headers).json()
+    asset_id = created["asset_id"]
+
+    response = client.patch(f"/assets/{asset_id}", json={"max_capacity_mwh": None}, headers=auth_headers)
+
+    assert response.status_code == 422
+    assert "max_capacity_mwh" in response.json()["detail"]
+    db_session.expire_all()
+    asset = db_session.query(Asset).filter(Asset.id == asset_id).first()
+    assert asset.max_capacity_mwh == 10.0
+
+
+# --- eic_code race: the unique constraint fires on commit ---
+
+def bypass_eic_code_precheck(monkeypatch, real_lookups):
+    """Let the first `real_lookups` Query.first() calls through, then return None,
+    so the route's eic_code pre-check misses the duplicate and db.commit() raises
+    IntegrityError — as when a concurrent request inserts the same eic_code."""
+    real_first = Query.first
+    calls = {"n": 0}
+
+    def first(self):
+        calls["n"] += 1
+        return real_first(self) if calls["n"] <= real_lookups else None
+
+    monkeypatch.setattr(Query, "first", first)
+
+
+def test_create_asset_integrity_error_returns_409(client, auth_headers, monkeypatch):
+    client.post("/assets", json=make_asset_payload(), headers=auth_headers)
+    bypass_eic_code_precheck(monkeypatch, real_lookups=0)
+
+    response = client.post("/assets", json=make_asset_payload(name="Battery Two"), headers=auth_headers)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Asset with eic_code 10T-FR-BATT-01 already exists"
+
+
+@pytest.mark.parametrize("method", ["put", "patch"])
+def test_update_asset_integrity_error_returns_409(client, db_session, auth_headers, monkeypatch, method):
+    client.post("/assets", json=make_asset_payload(), headers=auth_headers)
+    second = client.post(
+        "/assets", json=make_asset_payload(eic_code="10T-FR-BATT-02", name="Battery Two"), headers=auth_headers
+    ).json()
+    # Real lookup of the asset by id, then the eic_code conflict check is skipped
+    bypass_eic_code_precheck(monkeypatch, real_lookups=1)
+
+    body = make_asset_payload(name="Battery Two") if method == "put" else {"eic_code": "10T-FR-BATT-01"}
+    response = getattr(client, method)(f"/assets/{second['asset_id']}", json=body, headers=auth_headers)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Asset with eic_code 10T-FR-BATT-01 already exists"
+    monkeypatch.undo()
+    db_session.expire_all()
+    asset = db_session.query(Asset).filter(Asset.id == second["asset_id"]).first()
+    assert asset.eic_code == "10T-FR-BATT-02"
