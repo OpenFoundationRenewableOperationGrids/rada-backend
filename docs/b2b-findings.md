@@ -32,7 +32,7 @@ Story: BE-01 (#29). Tested on 7 November 2026 against OpenEMS Backend `2026.1.0`
 ## Behaviour
 
 - **Offline edge:** `getEdgesStatus` reports `"online": false`, without an error. The bridge logs it and still subscribes, so values flow as soon as the edge reconnects.
-- **Backend restart:** edges reconnect to the Backend by themselves. The bridge reconnects with backoff (1 s doubling to 60 s, reset when data flows) and resubscribes.
+- **Backend restart:** edges reconnect to the Backend by themselves. The bridge reconnects with backoff (1 s doubling to 60 s, reset when data flows) and resubscribes. The Backend then reads each subscription from its cache of every edge's latest values, which is empty until the edge has reconnected and sent them (all values on reconnection, then changes each cycle, plus a full resend every 5 minutes). Until then values arrive as `null` and the bridge posts nothing rather than empty data. Measured on 7 Nov: bridge back in **8 s**, values back after **2 min 52 s**.
 - **Several clients:** each B2B connection has its own subscription, so preprod and production bridges can share one Backend (see Security and operations).
 
 ## Data observed (for BE-02)
@@ -55,9 +55,9 @@ Story: BE-01 (#29). Tested on 7 November 2026 against OpenEMS Backend `2026.1.0`
 |---|---|
 | Live values from `edge0` received over B2B | ✔ 7 Nov, by hand (websocat), then by the bridge |
 | Posted to preprod and stored | ✔ 7 Nov 15:17–16:32 from the T14: every post `201 Created`, 2 assets every 60 s, none skipped |
-| Bridge as its own service on the VPS | *to complete* |
-| Backend restart: rows resume within 5 minutes with no action | *to complete* |
-| 24 hours of rows | *to complete* |
+| Bridge as its own service on the VPS | ✔ 7 Nov 17:45 UTC: `rada-bridge-preprod`, same image as the API (`command: python -m bridge`), reaching the Backend and the API by container name on `cb_network` |
+| Backend restart: rows resume within 5 minutes with no action | ✔ 7 Nov: Backend restarted 17:48:30 UTC, bridge reconnected 17:48:38, posts resumed 17:51:22 (**2 min 52 s**) |
+| 24 hours of rows | *running since 7 Nov 17:45 UTC; result to be added* |
 
 ---
 
@@ -93,7 +93,7 @@ Story : BE-01 (#29). Testé le 7 novembre 2026 avec le Backend OpenEMS `2026.1.0
 ## Comportement
 
 - **Edge hors ligne :** `getEdgesStatus` renvoie `"online": false`, sans erreur. Le bridge le journalise et s'abonne quand même ; les valeurs arrivent dès que l'edge se reconnecte.
-- **Redémarrage du Backend :** les edges se reconnectent seuls au Backend. Le bridge se reconnecte avec un délai croissant (1 s, doublé jusqu'à 60 s, remis à 1 s dès que les données circulent) et se réabonne.
+- **Redémarrage du Backend :** les edges se reconnectent seuls au Backend. Le bridge se reconnecte avec un délai croissant (1 s, doublé jusqu'à 60 s, remis à 1 s dès que les données circulent) et se réabonne. Le Backend lit ensuite chaque abonnement dans son cache des dernières valeurs de chaque edge, vide tant que l'edge ne s'est pas reconnecté et ne les a pas envoyées (toutes les valeurs à la reconnexion, puis les changements à chaque cycle, plus un renvoi complet toutes les 5 minutes). D'ici là les valeurs arrivent à `null` et le bridge n'envoie rien plutôt que des données vides. Mesuré le 7 nov. : bridge reconnecté en **8 s**, valeurs revenues après **2 min 52 s**.
 - **Plusieurs clients :** chaque connexion B2B a son propre abonnement ; les bridges de préprod et de production peuvent partager un Backend (voir Sécurité et exploitation).
 
 ## Données observées (pour BE-02)
@@ -116,6 +116,6 @@ Story : BE-01 (#29). Testé le 7 novembre 2026 avec le Backend OpenEMS `2026.1.0
 |---|---|
 | Valeurs en direct de `edge0` reçues via B2B | ✔ 7 nov., à la main (websocat), puis par le bridge |
 | Envoyées à la préprod et stockées | ✔ 7 nov. 15h17–16h32 depuis le T14 : chaque envoi `201 Created`, 2 actifs toutes les 60 s, aucun ignoré |
-| Bridge comme service à part sur le VPS | *à compléter* |
-| Redémarrage du Backend : les lignes reprennent en moins de 5 minutes sans intervention | *à compléter* |
-| 24 heures de lignes | *à compléter* |
+| Bridge comme service à part sur le VPS | ✔ 7 nov. 17h45 UTC : `rada-bridge-preprod`, même image que l'API (`command: python -m bridge`), joignant le Backend et l'API par nom de conteneur sur `cb_network` |
+| Redémarrage du Backend : les lignes reprennent en moins de 5 minutes sans intervention | ✔ 7 nov. : Backend redémarré à 17h48:30 UTC, bridge reconnecté à 17h48:38, envois repris à 17h51:22 (**2 min 52 s**) |
+| 24 heures de lignes | *en cours depuis le 7 nov. 17h45 UTC ; résultat à ajouter* |
