@@ -8,9 +8,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY bridge/requirements.txt bridge/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt -r bridge/requirements.txt
 
 COPY *.py .
+# The OpenEMS bridge runs from the same image as a second service:
+#   command: python -m bridge
+COPY bridge/ bridge/
 
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
