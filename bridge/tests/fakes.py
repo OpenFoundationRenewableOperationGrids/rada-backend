@@ -15,12 +15,14 @@ class FakeWebSocket:
     - After the last message the connection ends: cleanly, or with an error if `drop` is set.
     """
 
-    def __init__(self, edges_online=None, notifications=(), errors=None, drop=False, silent=False):
+    def __init__(self, edges_online=None, notifications=(), errors=None, drop=False, silent=False,
+                 hold_open=False):
         self.edges_online = edges_online or {"edge0": True}
         self.notifications = list(notifications)
         self.errors = errors or {}
         self.drop = drop
         self.silent = silent          # never answer: to test timeouts
+        self.hold_open = hold_open    # stay connected after the last message
         self.sent = []                # every request the bridge sent, as dicts
         self._inbox = deque()
 
@@ -57,7 +59,7 @@ class FakeWebSocket:
     async def __anext__(self):
         if self._inbox:
             return self._inbox.popleft()
-        if self.silent:
+        if self.silent or self.hold_open:
             # Like a real socket with nothing to say: wait (until the timeout fires).
             import asyncio
             await asyncio.sleep(3600)

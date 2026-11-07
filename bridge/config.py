@@ -59,8 +59,16 @@ class BridgeConfig:
     connections: tuple[ConnectionConfig, ...] = ()
 
 
-def load_config(path: str | Path, env: Mapping[str, str] = os.environ) -> BridgeConfig:
-    """Read the TOML file at `path` and the secrets from `env`."""
+def load_config(
+    path: str | Path,
+    env: Mapping[str, str] = os.environ,
+    require_rada: bool = True,
+) -> BridgeConfig:
+    """Read the TOML file at `path` and the secrets from `env`.
+
+    With require_rada=False (dry run: nothing is posted), RADA_API_URL and
+    RADA_API_KEY may be missing.
+    """
     path = Path(path)
     try:
         with path.open("rb") as f:
@@ -84,9 +92,16 @@ def load_config(path: str | Path, env: Mapping[str, str] = os.environ) -> Bridge
     if len(names) != len(set(names)):
         raise ConfigError("Connection names must be unique")
 
+    if require_rada:
+        rada_api_url = _require_env(env, "RADA_API_URL").rstrip("/")
+        rada_api_key = _require_env(env, "RADA_API_KEY")
+    else:
+        rada_api_url = env.get("RADA_API_URL", "").strip().rstrip("/")
+        rada_api_key = env.get("RADA_API_KEY", "").strip()
+
     return BridgeConfig(
-        rada_api_url=_require_env(env, "RADA_API_URL").rstrip("/"),
-        rada_api_key=_require_env(env, "RADA_API_KEY"),
+        rada_api_url=rada_api_url,
+        rada_api_key=rada_api_key,
         post_interval_sec=post_interval,
         connections=connections,
     )

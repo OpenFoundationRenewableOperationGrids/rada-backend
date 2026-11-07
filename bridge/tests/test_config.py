@@ -117,3 +117,19 @@ def test_post_interval_too_short(tmp_path):
 def test_no_connections(tmp_path):
     with pytest.raises(ConfigError, match="At least one"):
         load_config(write(tmp_path, "post_interval_sec = 60\n"), ENV)
+
+
+def test_dry_run_does_not_need_the_rada_variables(tmp_path):
+    env = {k: v for k, v in ENV.items() if not k.startswith("RADA_")}
+
+    config = load_config(write(tmp_path, VALID), env, require_rada=False)
+
+    assert config.rada_api_key == ""
+    assert config.connections[0].user == "admin"   # OpenEMS credentials are still required
+
+
+def test_rada_variables_required_by_default(tmp_path):
+    env = {k: v for k, v in ENV.items() if k != "RADA_API_KEY"}
+
+    with pytest.raises(ConfigError, match="RADA_API_KEY"):
+        load_config(write(tmp_path, VALID), env)
