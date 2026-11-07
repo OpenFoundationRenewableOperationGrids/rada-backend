@@ -12,8 +12,11 @@ interrupts the wait or the stream straight away.
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 
-from bridge.source import ChannelSource, ConnectionLost, Reading
+from bridge.config import AssetConfig
+from bridge.source import ChannelSource, ConnectionLost, Reading, utc_now
+from bridge.translate import Skipped, Snapshot, to_telemetry
 
 log = logging.getLogger("bridge.runner")
 
@@ -56,3 +59,34 @@ async def run_forever(
             delay = backoff.next_delay()
             log.warning("[%s] %s. Reconnecting in %.0f s", source.name, exc, delay)
             await sleep(delay)
+
+
+async def publish_once(assets, snapshot: Snapshot, poster, now: datetime) -> tuple[int, int]:
+    """Post the latest values of every asset once. Returns (posted, skipped)."""
+    posted = skipped = 0
+    for asset in assets:
+        result = to_telemetry(asset, snapshot, now)
+        if isinstance(result, Skipped):
+            log.warning("Asset %s (%s/%s): nothing posted, %s",
+                        asset.asset_id, asset.edge_id, asset.component, result.reason)
+            skipped += 1
+        elif await poster.post_telemetry(asset.asset_id, result):
+            posted += 1
+        else:
+            skipped += 1
+    return posted, skipped
+
+
+async def publish_forever(
+    assets: tuple[AssetConfig, ...] | list[AssetConfig],
+    snapshot: Snapshot,
+    poster,
+    interval_sec: float,
+    clock: Callable[[], datetime] = utc_now,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
+    """Every `interval_sec`, post the latest snapshot of each asset."""
+    while True:
+        await sleep(interval_sec)    # wait first, so the first round has data
+        posted, skipped = await publish_once(assets, snapshot, poster, clock())
+        log.info("Posted %d asset(s), skipped %d", posted, skipped)
