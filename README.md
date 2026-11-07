@@ -587,6 +587,7 @@ The seed scripts populate **30 days of realistic historical data at 10-minute re
 After seeding, the simulator keeps the dataset "live":
 
 - Runs on a configurable interval (`SIMULATOR_INTERVAL_SEC`)
+- **Skips every asset with an `edge_id`**: those are fed by the OpenEMS bridge (`bridge/`), so real and invented readings never mix
 - Posts new readings for every asset via **authenticated internal HTTP calls** to the same API real assets would use:
 
 ```python
