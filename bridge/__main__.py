@@ -99,8 +99,10 @@ def main() -> int:
         level=os.getenv("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    # The websockets library logs every connection attempt; keep its warnings only.
-    logging.getLogger("websockets").setLevel(logging.WARNING)
+    # websockets logs every connection attempt and httpx every request;
+    # keep their warnings only (our own "Posted N asset(s)" line says enough).
+    for noisy in ("websockets", "httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     try:
         config = load_config(args.config, require_rada=not args.dry_run)

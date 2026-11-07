@@ -102,20 +102,60 @@ def test_publish_once_skips_an_asset_without_data():
     assert poster.posts[0][0] == 2
 
 
-def test_publish_forever_waits_then_posts_each_interval():
-    class Stop(Exception):
-        pass
+class FakeTime:
+    """A clock that only moves when the code sleeps (or when we move it)."""
 
-    poster, delays = RecordingPoster(), []
+    def __init__(self):
+        self.now = 1000.0
+
+    def monotonic(self):
+        return self.now
+
+
+class Stop(Exception):
+    pass
+
+
+def run_publisher(poster, rounds, post_duration=0.0, interval=60):
+    fake, delays = FakeTime(), []
+
+    class SlowPoster:
+        async def post_telemetry(self, asset_id, payload):
+            fake.now += post_duration          # posting takes time
+            return await poster.post_telemetry(asset_id, payload)
 
     async def sleep(seconds):
         delays.append(seconds)
-        if len(delays) > 2:
+        if len(delays) > rounds:
             raise Stop
+        fake.now += seconds
 
     with pytest.raises(Stop):
-        asyncio.run(publish_forever([SOLAR], full_snapshot(), poster, 60,
-                                    clock=lambda: T0 + timedelta(seconds=1), sleep=sleep))
+        asyncio.run(publish_forever([SOLAR], full_snapshot(), SlowPoster(), interval,
+                                    clock=lambda: T0 + timedelta(seconds=1),
+                                    sleep=sleep, monotonic=fake.monotonic))
+    return delays
+
+
+def test_publish_forever_waits_then_posts_each_interval():
+    poster = RecordingPoster()
+
+    delays = run_publisher(poster, rounds=2)
 
     assert delays == [60, 60, 60]
     assert len(poster.posts) == 2       # one post per completed interval
+
+
+def test_publishing_time_does_not_drift_the_rhythm():
+    # Each round takes 0.5 s to post: the next wait is shortened to stay on time.
+    delays = run_publisher(RecordingPoster(), rounds=3, post_duration=0.5)
+
+    assert delays == [60, 59.5, 59.5, 59.5]
+
+
+def test_missed_rounds_are_skipped_not_bursted():
+    # One round takes 150 s (e.g. the laptop slept): two rounds are skipped.
+    poster = RecordingPoster()
+    delays = run_publisher(poster, rounds=1, post_duration=150)
+
+    assert delays[1] == 30              # back on the 60 s grid: 1000+60+3x60 = 1240

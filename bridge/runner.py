@@ -11,6 +11,7 @@ interrupts the wait or the stream straight away.
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 
@@ -84,9 +85,24 @@ async def publish_forever(
     interval_sec: float,
     clock: Callable[[], datetime] = utc_now,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
-    """Every `interval_sec`, post the latest snapshot of each asset."""
+    """Every `interval_sec`, post the latest snapshot of each asset.
+
+    Rounds follow a fixed rhythm (start + n x interval), so the time spent
+    posting doesn't add up into drift. If the process falls more than a whole
+    interval behind (e.g. a laptop waking from sleep), missed rounds are
+    skipped rather than posted in a burst.
+    """
+    next_round = monotonic() + interval_sec   # wait first, so the first round has data
     while True:
-        await sleep(interval_sec)    # wait first, so the first round has data
+        await sleep(max(0.0, next_round - monotonic()))
         posted, skipped = await publish_once(assets, snapshot, poster, clock())
         log.info("Posted %d asset(s), skipped %d", posted, skipped)
+
+        next_round += interval_sec
+        now = monotonic()
+        if next_round <= now:
+            missed = int((now - next_round) // interval_sec) + 1
+            log.warning("Fell behind: skipping %d round(s)", missed)
+            next_round += missed * interval_sec
