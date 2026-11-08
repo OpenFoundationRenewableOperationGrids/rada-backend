@@ -131,6 +131,8 @@ def parse(text: str) -> Response | Notification:
 
     if "error" in message:
         err = message["error"] or {}
+        if not isinstance(err, dict):
+            raise ProtocolError("Error must be an object")
         return Response(
             id=message["id"],
             error=JsonRpcError(err.get("code", 0), err.get("message", ""), err.get("data")),
@@ -138,8 +140,10 @@ def parse(text: str) -> Response | Notification:
     return Response(id=message["id"], result=message.get("result"))
 
 
-def parse_edges_status(result: dict) -> dict[str, bool]:
+def parse_edges_status(result: Any) -> dict[str, bool]:
     """{"edge0": {"online": true}} -> {"edge0": True}"""
+    if not isinstance(result, dict) or not all(isinstance(s, dict) for s in result.values()):
+        raise ProtocolError(f"Unexpected getEdgesStatus result: {result!r}")
     return {edge_id: bool(status.get("online")) for edge_id, status in result.items()}
 
 

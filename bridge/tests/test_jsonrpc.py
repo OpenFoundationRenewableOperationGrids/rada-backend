@@ -130,6 +130,7 @@ def test_current_data_keeps_missing_values_as_none():
         '{"id": "x", "result": {}}',            # missing "jsonrpc": "2.0"
         '{"jsonrpc": "2.0"}',                   # neither id nor method
         '{"jsonrpc": "2.0", "method": "x", "params": [1]}',
+        '{"jsonrpc": "2.0", "id": "x", "error": "boom"}',   # error is not an object
     ],
 )
 def test_invalid_messages(text):
@@ -141,3 +142,9 @@ def test_round_trip():
     request = jsonrpc.get_edges_status(["edge0"])
 
     assert json.loads(jsonrpc.encode(request)) == request
+
+
+@pytest.mark.parametrize("result", [None, [], "online", {"edge0": True}])
+def test_unexpected_edges_status_is_a_protocol_error(result):
+    with pytest.raises(ProtocolError):
+        jsonrpc.parse_edges_status(result)

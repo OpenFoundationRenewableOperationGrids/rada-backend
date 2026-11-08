@@ -1,0 +1,9 @@
+# Keep local config, secrets, tests and caches out of Docker images
+bridge/connections.toml
+**/tests/
+.env*
+**/__pycache__/
+*.pyc
+venv/
+.venv/
+.git/
