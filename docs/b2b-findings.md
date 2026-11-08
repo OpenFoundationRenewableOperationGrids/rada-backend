@@ -57,7 +57,8 @@ Story: BE-01 (#29). Tested on 7 November 2026 against OpenEMS Backend `2026.1.0`
 | Posted to preprod and stored | ✔ 7 Nov 15:17–16:32 from the T14: every post `201 Created`, 2 assets every 60 s, none skipped |
 | Bridge as its own service on the VPS | ✔ 7 Nov 17:45 UTC: `rada-bridge-preprod`, same image as the API (`command: python -m bridge`), reaching the Backend and the API by container name on `cb_network` |
 | Backend restart: rows resume within 5 minutes with no action | ✔ 7 Nov: Backend restarted 17:48:30 UTC, bridge reconnected 17:48:38, posts resumed 17:51:22 (**2 min 52 s**) |
-| 24 hours of rows | *running since 7 Nov 17:45 UTC; result to be added* |
+| 24 hours of rows | ✔ 7 Nov 17:46 → 8 Nov 17:03 UTC (**23 h 17 min**, stopped early on purpose): **1,394 rows per asset** (49 and 50) out of 1,398 possible rounds. The 4 missing rounds are two 3-minute gaps on 7 Nov: 17:48–17:51 (the Backend restart test above) and 18:36–18:39 (most likely the redeploy of `rada-app-preprod` with the simulator fix). No round was missed in the 22 h 24 min after that |
+| Redeploy with the review fixes | ✔ 8 Nov 17:22 UTC, commit `9113643`: connected and subscribed in under 0.1 s, then 2 assets posted every 60 s, none skipped |
 
 ---
 
@@ -118,4 +119,5 @@ Story : BE-01 (#29). Testé le 7 novembre 2026 avec le Backend OpenEMS `2026.1.0
 | Envoyées à la préprod et stockées | ✔ 7 nov. 15h17–16h32 depuis le T14 : chaque envoi `201 Created`, 2 actifs toutes les 60 s, aucun ignoré |
 | Bridge comme service à part sur le VPS | ✔ 7 nov. 17h45 UTC : `rada-bridge-preprod`, même image que l'API (`command: python -m bridge`), joignant le Backend et l'API par nom de conteneur sur `cb_network` |
 | Redémarrage du Backend : les lignes reprennent en moins de 5 minutes sans intervention | ✔ 7 nov. : Backend redémarré à 17h48:30 UTC, bridge reconnecté à 17h48:38, envois repris à 17h51:22 (**2 min 52 s**) |
-| 24 heures de lignes | *en cours depuis le 7 nov. 17h45 UTC ; résultat à ajouter* |
+| 24 heures de lignes | ✔ du 7 nov. 17h46 au 8 nov. 17h03 UTC (**23 h 17 min**, arrêt volontairement anticipé) : **1 394 lignes par actif** (49 et 50) sur 1 398 cycles possibles. Les 4 cycles manquants correspondent à deux trous de 3 minutes le 7 nov. : 17h48–17h51 (le test de redémarrage du Backend ci-dessus) et 18h36–18h39 (très probablement le redéploiement de `rada-app-preprod` avec le correctif du simulateur). Aucun cycle manqué pendant les 22 h 24 min suivantes |
+| Redéploiement avec les correctifs de la revue | ✔ 8 nov. 17h22 UTC, commit `9113643` : connecté et abonné en moins de 0,1 s, puis 2 actifs envoyés toutes les 60 s, aucun ignoré |
