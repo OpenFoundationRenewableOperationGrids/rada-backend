@@ -1,0 +1,3 @@
+# Bridge dependencies, on top of the API's requirements.txt (same image).
+websockets==17.4
+httpx==0.28.1

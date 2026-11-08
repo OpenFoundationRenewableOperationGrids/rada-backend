@@ -1,0 +1,30 @@
+# RADA bridge configuration.
+# Copy to bridge/connections.toml (ignored by git) and fill in the asset ids.
+#
+# Secrets are never written here: each connection names the environment
+# variables that hold its credentials. RADA_API_URL and RADA_API_KEY are
+# also read from the environment.
+
+# How often the latest values are posted to RADA, in seconds (minimum 2).
+post_interval_sec = 60
+
+# One block per OpenEMS Backend. A Backend serves all the edges registered with it.
+[[connections]]
+name = "vps"
+url = "ws://100.88.150.125:8076"     # B2B websocket, Tailscale only
+user_env = "OPENEMS_VPS_USER"
+password_env = "OPENEMS_VPS_PASSWORD"
+
+# One block per RADA asset fed by this Backend.
+# kind decides which channels are read: battery or solar.
+[[connections.assets]]
+asset_id = 1          # id of the asset in RADA
+edge_id = "edge0"
+component = "ess0"
+kind = "battery"
+
+[[connections.assets]]
+asset_id = 2
+edge_id = "edge0"
+component = "meter1"
+kind = "solar"

@@ -218,6 +218,15 @@ def _fetch_assets() -> list[dict]:
         return []
 
 
+def simulated_assets(assets: list[dict]) -> list[dict]:
+    """The assets the simulator should feed: those with no real source.
+
+    An asset with an edge_id is fed by the OpenEMS bridge (`python -m bridge`);
+    simulating it too would mix invented readings with real ones.
+    """
+    return [asset for asset in assets if not asset.get("edge_id")]
+
+
 def _post_telemetry(asset_id: int, payload: dict) -> bool:
     try:
         r = requests.post(f"{API_BASE_URL}/assets/{asset_id}/telemetry", headers=HEADERS, json=payload, timeout=10)
@@ -237,10 +246,10 @@ def run():
 
     while True:
         tick_start = time.monotonic()
-        assets     = _fetch_assets()
+        assets     = simulated_assets(_fetch_assets())
 
         if not assets:
-            log.warning("No assets returned — retrying next tick")
+            log.warning("No assets to simulate — retrying next tick")
         else:
             ok = fail = 0
             for asset in assets:

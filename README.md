@@ -160,6 +160,9 @@ rada-backend/
 ├── grid_signal_fetcher.py  # RTE grid signals — not wired into main.py yet
 ├── create_tables.py        # Creates missing tables, without touching existing ones
 ├── migrations/             # SQL migrations for existing databases (see §9)
+├── bridge/                 # OpenEMS bridge: reads OpenEMS Backends over B2B and posts
+│                           #   to the API; runs as its own service (see bridge/README.md)
+├── docs/                   # Findings and design notes (e.g. b2b-findings.md)
 ├── tests/                  # pytest suite (see TESTING.md)
 ├── .github/workflows/      # CI (lint, tests, Docker build), PR title check,
 │                           #   on-demand Claude review (claude-review.yml)
@@ -438,6 +441,7 @@ Key variables:
 | `VLLM_API_KEY` | API key for vLLM, if it was started with `--api-key` (defaults to `not-needed`) |
 | `VLLM_MODEL` | Model name served by vLLM (defaults to `Qwen/Qwen2.5-7B-Instruct`) |
 | RTE OAuth2 credentials | Stored server-side for Actual Generation / Balancing Energy API calls |
+| `BRIDGE_CONFIG`, `RADA_API_URL`, `RADA_API_KEY`, `OPENEMS_*` | OpenEMS bridge only (`python -m bridge`) — see [bridge/README.md](bridge/README.md) |
 
 `.gitignore` excludes both `.env` files and any credentials.
 
@@ -583,6 +587,7 @@ The seed scripts populate **30 days of realistic historical data at 10-minute re
 After seeding, the simulator keeps the dataset "live":
 
 - Runs on a configurable interval (`SIMULATOR_INTERVAL_SEC`)
+- **Skips every asset with an `edge_id`**: those are fed by the OpenEMS bridge (`bridge/`), so real and invented readings never mix
 - Posts new readings for every asset via **authenticated internal HTTP calls** to the same API real assets would use:
 
 ```python

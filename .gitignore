@@ -10,3 +10,5 @@ bess.db
 *.gitignore~
 *~git.env
 *.log
+# Bridge config with real asset ids and addresses (copy the example)
+bridge/connections.toml
