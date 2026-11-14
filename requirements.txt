@@ -10,7 +10,7 @@ h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
 idna==3.18
-psycopg2-binary==2.9.12
+psycopg[binary]==3.3.9
 pydantic==2.12.5
 pydantic_core==2.41.5
 python-dotenv==1.2.2
