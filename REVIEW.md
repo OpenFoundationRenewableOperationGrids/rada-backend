@@ -41,4 +41,7 @@ everything you found is a Nit, lead the summary with "No blocking issues."
   is added or changed
 - Specific routes (`/assets/summary`) are declared before parameterised
   ones (`/assets/{asset_id}`)
-- Units follow the project conventions: MW, MWh, MVAr
+- Units follow the project conventions: new tables store W, Wh, var and %, with
+  OpenEMS signs (see `docs/DATA_MODEL.md` §3); the MVP columns (`power_mw`,
+  `energy_mwh`, `reactive_power_mvar`) keep MW, MWh and MVAr until the front end
+  has switched

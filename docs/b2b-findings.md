@@ -37,6 +37,8 @@ Story: BE-01 (#29). Tested on 7 November 2026 against OpenEMS Backend `2026.1.0`
 
 ## Data observed (for BE-02)
 
+*Formalised in [`DATA_MODEL.md`](DATA_MODEL.md) §3 (BE-02, #30). This section records what was observed on 7 November.*
+
 - Units: power in W (integer), energy in Wh (cumulative, `Wh_Σ`), SoC in %.
 - Signs: grid **+ import / − export**; ESS **+ discharge / − charge**; production and consumption always positive. Confirmed live with a balancing controller at grid setpoints −1 MW, 0 and +0.2 MW.
 - **Energy counters need a Timedata component on the edge** (e.g. `Timedata.Rrd4j`). Without one, every counter stays empty.
@@ -98,6 +100,8 @@ Story : BE-01 (#29). Testé le 7 novembre 2026 avec le Backend OpenEMS `2026.1.0
 - **Plusieurs clients :** chaque connexion B2B a son propre abonnement ; les bridges de préprod et de production peuvent partager un Backend (voir Sécurité et exploitation).
 
 ## Données observées (pour BE-02)
+
+*Formalisé dans [`DATA_MODEL.md`](DATA_MODEL.md) §3 (BE-02, #30). Cette section consigne ce qui a été observé le 7 novembre.*
 
 - Unités : puissance en W (entier), énergie en Wh (cumulée, `Wh_Σ`), SoC en %.
 - Signes : réseau **+ soutirage / − injection** ; ESS **+ décharge / − charge** ; production et consommation toujours positives. Confirmé en direct avec un contrôleur d'équilibrage à des consignes réseau de −1 MW, 0 et +0,2 MW.
