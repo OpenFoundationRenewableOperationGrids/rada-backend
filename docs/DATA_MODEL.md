@@ -18,6 +18,8 @@ flowchart TD
     ST --> TF["tariff<br>import and export price<br>with validity dates"]
     ST --> MM["metric_mapping<br>channel to metric"]
     MC["metric<br>core, optional and custom"] --> MM
+    LG["language<br>en, fr, de"] --> MT["metric_translation<br>names per language"]
+    MC --> MT
     MC --> ME
     ST --> ME[("measurement<br>hypertable")]
     AS -.->|"optional"| ME
@@ -32,7 +34,7 @@ flowchart TD
     classDef ts fill:#cfe2f3,stroke:#1155cc,color:#000
     classDef fin fill:#fff2cc,stroke:#bf9000,color:#000
     classDef sec fill:#eeeeee,stroke:#666666,color:#000
-    class PF,SC,ST,AS,DC,MC,MM ref
+    class PF,SC,ST,AS,DC,MC,MM,LG,MT ref
     class ME,MH,SD ts
     class TF,FA,FL fin
     class US,AK sec
@@ -44,6 +46,7 @@ Conventions:
 - Every reference table has `id`, `created_at` and `updated_at`. They are omitted from the tables below.
 - Reference rows are deactivated (`is_active`), not deleted, so history stays consistent.
 - **Storage units are W, Wh, var and %**, as OpenEMS reports them (confirmed on the live edge, 7 November 2026). The front end displays kW, kWh and kvar (MW and MWh where values are large).
+- **Languages are data.** Translated text lives in `…_translation` tables keyed by language, so a language is added without a schema change. English, French and German ship out of the box (German matches the OpenEMS vocabulary). V1.0 translates the metric catalogue; the interface itself is in English and French.
 - The integer `id` is the real key everywhere. OpenEMS names (`edge0`, `ess0`) are attributes used for matching, so history survives a component being renamed or replaced.
 
 ## §2 Reference tables
@@ -128,15 +131,38 @@ The catalogue of what can be measured.
 
 | Column | Type | Notes |
 |---|---|---|
-| key | text, unique | For example `battery_power` |
-| name_en, name_fr | text | Display names |
+| key | text, unique | For example `battery_power`. Language-neutral: used by the API, the bridge, the KPIs and exports |
 | unit | text | `W`, `Wh`, `var`, `%`, or any unit for a custom metric |
 | kind | enum | `instantaneous`, `cumulative` or `state` |
 | level | enum | `site`, `asset` or `both` |
 | category | enum | `core`, `optional` or `custom` (see §3) |
-| sign_note_en, sign_note_fr | text, nullable | The sign convention, for example positive is import |
 
-Core and optional metrics ship with RADA (seed file `seeds/metrics.yaml`) and cannot be deleted. Custom metrics are created by an administrator.
+Display names and sign notes are in `metric_translation`. Core and optional metrics ship with RADA (seed file `seeds/metrics.toml`) and cannot be deleted. Custom metrics are created by an administrator.
+
+### language
+
+The languages an install supports.
+
+| Column | Type | Notes |
+|---|---|---|
+| code | text, primary key | BCP 47 code: `en`, `fr`, `de` |
+| name | text | The language's own name: English, Français, Deutsch |
+| is_default | boolean | Exactly one row; `en` out of the box. Used when a translation is missing |
+| is_active | boolean | |
+
+### metric_translation
+
+One row per metric and language.
+
+| Column | Type | Notes |
+|---|---|---|
+| metric_id | FK metric | Primary key with `language_code` |
+| language_code | FK language | |
+| name | text | For example `Netzleistung` |
+| sign_note | text, nullable | For example `positiv = Netzbezug` |
+
+- Every metric has a translation in the default language; other languages fall back to it.
+- Other reference data that needs translating later (asset type labels, for example) gets its own `…_translation` table on the same pattern. There is no generic translation table, because it could not use foreign keys.
 
 ### metric_mapping
 
@@ -169,19 +195,19 @@ Unique on (`site_id`, `source`, `source_address`). The edge is not repeated: it 
 
 Core metrics have a default mapping, and the KPIs (`SPEC.md` §6) are calculated from them. Site channels verified on `edge0` (`2026.1.0`) on 7 November 2026, signs included. Asset channels are verified in the BE-02 verification step.
 
-| Key | Name (EN / FR) | Unit | Kind | Level | Site channel | Asset channel | Sign |
+| Key | Name (EN / FR / DE) | Unit | Kind | Level | Site channel | Asset channel | Sign |
 |---|---|---|---|---|---|---|---|
-| `production_power` | Production power / Puissance produite | W | instantaneous | both | `_sum/ProductionActivePower` | PV or wind meter `ActivePower` | always positive |
-| `consumption_power` | Consumption power / Puissance consommée | W | instantaneous | site | `_sum/ConsumptionActivePower` | — | always positive |
-| `grid_power` | Grid power / Puissance réseau | W | instantaneous | both | `_sum/GridActivePower` | grid meter `ActivePower` | + import / − export |
-| `battery_power` | Battery power / Puissance batterie | W | instantaneous | both | `_sum/EssActivePower` | ESS `ActivePower` | + discharge / − charge |
-| `battery_soc` | Battery state of charge / État de charge batterie | % | state | both | `_sum/EssSoc` | ESS `Soc` | 0 to 100 |
-| `production_energy` | Energy produced / Énergie produite | Wh | cumulative | both | `_sum/ProductionActiveEnergy` | PV or wind meter `ActiveProductionEnergy` | |
-| `consumption_energy` | Energy consumed / Énergie consommée | Wh | cumulative | site | `_sum/ConsumptionActiveEnergy` | — | |
-| `grid_import_energy` | Energy imported / Énergie soutirée | Wh | cumulative | site | `_sum/GridBuyActiveEnergy` | — | |
-| `grid_export_energy` | Energy exported / Énergie injectée | Wh | cumulative | site | `_sum/GridSellActiveEnergy` | — | |
-| `battery_charge_energy` | Battery charge energy / Énergie chargée | Wh | cumulative | both | `_sum/EssActiveChargeEnergy` | ESS `ActiveChargeEnergy` | |
-| `battery_discharge_energy` | Battery discharge energy / Énergie déchargée | Wh | cumulative | both | `_sum/EssActiveDischargeEnergy` | ESS `ActiveDischargeEnergy` | |
+| `production_power` | Production power / Puissance produite / Erzeugungsleistung | W | instantaneous | both | `_sum/ProductionActivePower` | PV or wind meter `ActivePower` | always positive |
+| `consumption_power` | Consumption power / Puissance consommée / Verbrauchsleistung | W | instantaneous | site | `_sum/ConsumptionActivePower` | — | always positive |
+| `grid_power` | Grid power / Puissance réseau / Netzleistung | W | instantaneous | both | `_sum/GridActivePower` | grid meter `ActivePower` | + import / − export |
+| `battery_power` | Battery power / Puissance batterie / Batterieleistung | W | instantaneous | both | `_sum/EssActivePower` | ESS `ActivePower` | + discharge / − charge |
+| `battery_soc` | Battery state of charge / État de charge batterie / Ladezustand | % | state | both | `_sum/EssSoc` | ESS `Soc` | 0 to 100 |
+| `production_energy` | Energy produced / Énergie produite / Erzeugte Energie | Wh | cumulative | both | `_sum/ProductionActiveEnergy` | PV or wind meter `ActiveProductionEnergy` | |
+| `consumption_energy` | Energy consumed / Énergie consommée / Verbrauchte Energie | Wh | cumulative | site | `_sum/ConsumptionActiveEnergy` | — | |
+| `grid_import_energy` | Energy imported / Énergie soutirée / Netzbezug | Wh | cumulative | site | `_sum/GridBuyActiveEnergy` | — | |
+| `grid_export_energy` | Energy exported / Énergie injectée / Netzeinspeisung | Wh | cumulative | site | `_sum/GridSellActiveEnergy` | — | |
+| `battery_charge_energy` | Battery charge energy / Énergie chargée / Geladene Energie | Wh | cumulative | both | `_sum/EssActiveChargeEnergy` | ESS `ActiveChargeEnergy` | |
+| `battery_discharge_energy` | Battery discharge energy / Énergie déchargée / Entladene Energie | Wh | cumulative | both | `_sum/EssActiveDischargeEnergy` | ESS `ActiveDischargeEnergy` | |
 
 Energy counters need a Timedata component on the edge (for example `Timedata.Rrd4j`); without one they stay empty.
 
@@ -189,13 +215,13 @@ Energy counters need a Timedata component on the edge (for example `Timedata.Rrd
 
 Shipped with RADA, charted and exported, with no KPI in 1.0.
 
-| Key | Name (EN / FR) | Unit | Kind | Level | Default asset channel | Note |
+| Key | Name (EN / FR / DE) | Unit | Kind | Level | Default asset channel | Note |
 |---|---|---|---|---|---|---|
-| `reactive_power` | Reactive power / Puissance réactive | var | instantaneous | asset | ESS or meter `ReactivePower` | OpenEMS has no site total |
-| `voltage` | Voltage / Tension | V | instantaneous | asset | meter `Voltage`, scale 0.001 | OpenEMS reports mV |
-| `current` | Current / Courant | A | instantaneous | asset | meter `Current`, scale 0.001 | OpenEMS reports mA |
-| `temperature` | Temperature / Température | °C | instantaneous | asset | — | Vendor-specific channel, mapped by hand |
-| `battery_stored_energy` | Stored energy / Énergie stockée | Wh | state | asset | — | Holds the MVP history only; OpenEMS does not report it |
+| `reactive_power` | Reactive power / Puissance réactive / Blindleistung | var | instantaneous | asset | ESS or meter `ReactivePower` | OpenEMS has no site total |
+| `voltage` | Voltage / Tension / Spannung | V | instantaneous | asset | meter `Voltage`, scale 0.001 | OpenEMS reports mV |
+| `current` | Current / Courant / Strom | A | instantaneous | asset | meter `Current`, scale 0.001 | OpenEMS reports mA |
+| `temperature` | Temperature / Température / Temperatur | °C | instantaneous | asset | — | Vendor-specific channel, mapped by hand |
+| `battery_stored_energy` | Stored energy / Énergie stockée / Gespeicherte Energie | Wh | state | asset | — | Holds the MVP history only; OpenEMS does not report it |
 
 Not carried over: `power_factor` (calculated from active and reactive power when needed) and the OpenEMS energy-flow counters (`ProductionToEssEnergy` and the others), which follow an allocation rule rather than a measurement. An administrator can still map them as custom metrics.
 
@@ -203,6 +229,7 @@ Not carried over: `power_factor` (calculated from active and reactive power when
 
 - Created by an administrator (`POST /metrics`) before they can be mapped.
 - Numeric only; a unit is required; the key is unique and cannot reuse a core or optional key.
+- A name in the default language is required; names in other languages are optional and fall back to it.
 - Charted generically from their name and unit, and included in exports.
 - No KPI is calculated from them.
 
@@ -210,7 +237,7 @@ Not carried over: `power_factor` (calculated from active and reactive power when
 
 A mapping row holds: source, site (which gives the connection and edge), optional asset, channel address, target metric and scale. The edge itself is never repeated in the row.
 
-When a site is linked to an edge, the default template creates:
+When a site is linked to an edge, the default template (`seeds/openems_mapping.toml`) creates:
 
 - **Site rows:** the eleven `_sum` channels of §3.2, with an empty asset.
 - **Asset rows, per confirmed asset, by type:**
@@ -388,7 +415,7 @@ The seed script no longer creates or drops tables: migrations create the schema,
 
 - `POST /sites/{site_id}/measurements`: a batch of `{time, metric, asset_id, value}` items, where `metric` is a key from the catalogue. The API knows nothing about OpenEMS: the bridge, the simulator, the seed and CSV import (BE-06) all post vendor-neutral metric keys.
 - The API checks that the metric exists and is active, that the asset belongs to the site, and that the metric's level allows the asset to be filled in or empty. A duplicate (same time, site, asset and metric) is ignored, not an error.
-- `GET /metrics` lists the catalogue; `POST /metrics` creates a custom metric (administrator).
+- `GET /metrics` lists the catalogue with every translation, or one language with `?lang=de` (falling back to the default language); `POST /metrics` creates a custom metric with its translations (administrator). `GET /languages` lists the active languages. The front end picks the name matching the user's language.
 - The MVP endpoint `POST /assets/{asset_id}/telemetry` keeps working until the front end and the bridge have switched.
 
 ---
@@ -409,6 +436,7 @@ Conventions :
 - Chaque table de référence a `id`, `created_at` et `updated_at`. Ils sont omis des tableaux ci-dessous.
 - Les lignes de référence sont désactivées (`is_active`), pas supprimées, pour que l'historique reste cohérent.
 - **Les unités de stockage sont W, Wh, var et %**, telles que les rapporte OpenEMS (confirmé sur l'edge en direct le 7 novembre 2026). Le front affiche kW, kWh et kvar (MW et MWh pour les grandes valeurs).
+- **Les langues sont des données.** Les textes traduits sont dans des tables `…_translation` dont la clé inclut la langue : on ajoute une langue sans changer le schéma. L'anglais, le français et l'allemand sont fournis d'emblée (l'allemand correspond au vocabulaire d'OpenEMS). La V1.0 traduit le catalogue de métriques ; l'interface elle-même est en anglais et en français.
 - L'`id` entier est partout la vraie clé. Les noms OpenEMS (`edge0`, `ess0`) sont des attributs servant au rapprochement : l'historique survit au renommage ou au remplacement d'un composant.
 
 ## §2 Tables de référence
@@ -493,15 +521,38 @@ Le catalogue de ce qui peut être mesuré.
 
 | Colonne | Type | Notes |
 |---|---|---|
-| key | text, unique | Par exemple `battery_power` |
-| name_en, name_fr | text | Noms affichés |
+| key | text, unique | Par exemple `battery_power`. Indépendante de la langue : utilisée par l'API, le bridge, les KPI et les exports |
 | unit | text | `W`, `Wh`, `var`, `%`, ou toute unité pour une métrique personnalisée |
 | kind | enum | `instantaneous`, `cumulative` ou `state` |
 | level | enum | `site`, `asset` ou `both` |
 | category | enum | `core`, `optional` ou `custom` (voir §3) |
-| sign_note_en, sign_note_fr | text, nullable | La convention de signe, par exemple positif = soutirage |
 
-Les métriques de base et optionnelles sont livrées avec RADA (fichier de seed `seeds/metrics.yaml`) et ne peuvent pas être supprimées. Les métriques personnalisées sont créées par un administrateur.
+Les noms affichés et les notes de signe sont dans `metric_translation`. Les métriques de base et optionnelles sont livrées avec RADA (fichier de seed `seeds/metrics.toml`) et ne peuvent pas être supprimées. Les métriques personnalisées sont créées par un administrateur.
+
+### language
+
+Les langues prises en charge par une installation.
+
+| Colonne | Type | Notes |
+|---|---|---|
+| code | text, clé primaire | Code BCP 47 : `en`, `fr`, `de` |
+| name | text | Le nom de la langue dans cette langue : English, Français, Deutsch |
+| is_default | boolean | Une seule ligne ; `en` d'emblée. Utilisée quand une traduction manque |
+| is_active | boolean | |
+
+### metric_translation
+
+Une ligne par métrique et par langue.
+
+| Colonne | Type | Notes |
+|---|---|---|
+| metric_id | FK metric | Clé primaire avec `language_code` |
+| language_code | FK language | |
+| name | text | Par exemple `Netzleistung` |
+| sign_note | text, nullable | Par exemple `positiv = Netzbezug` |
+
+- Chaque métrique a une traduction dans la langue par défaut ; les autres langues se rabattent sur elle.
+- Les autres données de référence à traduire plus tard (libellés des types d'actifs, par exemple) auront leur propre table `…_translation` sur le même modèle. Pas de table de traduction générique, car elle ne pourrait pas utiliser de clés étrangères.
 
 ### metric_mapping
 
@@ -548,7 +599,7 @@ Les métriques de base ont un mapping par défaut, et les KPI (`SPEC.md` §6) so
 | `battery_charge_energy` | Wh | cumulative | both | `_sum/EssActiveChargeEnergy` | ESS `ActiveChargeEnergy` | |
 | `battery_discharge_energy` | Wh | cumulative | both | `_sum/EssActiveDischargeEnergy` | ESS `ActiveDischargeEnergy` | |
 
-Les noms affichés (EN / FR) figurent dans le tableau anglais ci-dessus. Les compteurs d'énergie exigent un composant Timedata sur l'edge (par ex. `Timedata.Rrd4j`) ; sans lui ils restent vides.
+Les noms affichés (EN / FR / DE) figurent dans le tableau anglais ci-dessus. Les compteurs d'énergie exigent un composant Timedata sur l'edge (par ex. `Timedata.Rrd4j`) ; sans lui ils restent vides.
 
 ### §3.3 Métriques optionnelles
 
@@ -568,6 +619,7 @@ Non repris : `power_factor` (calculé à partir des puissances active et réacti
 
 - Créées par un administrateur (`POST /metrics`) avant de pouvoir être mappées.
 - Numériques uniquement ; unité obligatoire ; clé unique, qui ne peut pas reprendre une clé de base ou optionnelle.
+- Un nom dans la langue par défaut est obligatoire ; les noms dans les autres langues sont facultatifs et se rabattent sur lui.
 - Affichées de façon générique à partir de leur nom et de leur unité, et incluses dans les exports.
 - Aucun KPI n'est calculé à partir d'elles.
 
@@ -575,7 +627,7 @@ Non repris : `power_factor` (calculé à partir des puissances active et réacti
 
 Une ligne de mapping contient : la source, le site (qui donne la connexion et l'edge), l'actif optionnel, l'adresse du channel, la métrique cible et l'échelle. L'edge lui-même n'est jamais répété dans la ligne.
 
-Quand un site est relié à un edge, le modèle par défaut crée :
+Quand un site est relié à un edge, le modèle par défaut (`seeds/openems_mapping.toml`) crée :
 
 - **Lignes de site :** les onze channels `_sum` du §3.2, avec un actif vide.
 - **Lignes d'actif, par actif confirmé, selon son type :**
@@ -695,5 +747,5 @@ Le script de seed ne crée et ne supprime plus de tables : les migrations créen
 
 - `POST /sites/{site_id}/measurements` : un lot d'éléments `{time, metric, asset_id, value}`, où `metric` est une clé du catalogue. L'API ne connaît pas OpenEMS : le bridge, le simulateur, le seed et l'import CSV (BE-06) envoient tous des clés de métriques indépendantes du fabricant.
 - L'API vérifie que la métrique existe et est active, que l'actif appartient au site, et que le niveau de la métrique autorise un actif renseigné ou vide. Un doublon (même instant, site, actif et métrique) est ignoré, sans erreur.
-- `GET /metrics` liste le catalogue ; `POST /metrics` crée une métrique personnalisée (administrateur).
+- `GET /metrics` liste le catalogue avec toutes ses traductions, ou une seule langue avec `?lang=de` (repli sur la langue par défaut) ; `POST /metrics` crée une métrique personnalisée avec ses traductions (administrateur). `GET /languages` liste les langues actives. Le front choisit le nom correspondant à la langue de l'utilisateur.
 - L'endpoint MVP `POST /assets/{asset_id}/telemetry` continue de fonctionner jusqu'à la bascule du front et du bridge.
