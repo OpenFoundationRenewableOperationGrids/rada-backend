@@ -145,6 +145,7 @@ kind = "instantaneous"
 level = "asset"
 category = "optional"
 name = { en = "Current", fr = "Courant", de = "Strom" }
+sign_note = { en = "Same sign as active power", fr = "Même signe que la puissance active", de = "Gleiches Vorzeichen wie die Wirkleistung" }
 
 [[metric]]
 key = "temperature"
