@@ -1,0 +1,120 @@
+# seeds/openems_mapping.toml
+#
+# The default OpenEMS mapping template (BE-02, docs/DATA_MODEL.md §3.5).
+# Applied when a site is linked to an edge: the site rows straight away, the
+# asset rows for each asset once it is confirmed. Each entry becomes one
+# metric_mapping row with source = "openems".
+#
+# Site rows use full channel addresses from the _sum component, with an
+# empty asset. Asset rows give the channel only: the component prefix is the
+# asset's source_component, e.g. "ess0" + "ActivePower" -> "ess0/ActivePower".
+#
+# scale multiplies the raw value into the metric's unit (default 1).
+
+[[site]]
+address = "_sum/ProductionActivePower"
+metric = "production_power"
+
+[[site]]
+address = "_sum/ConsumptionActivePower"
+metric = "consumption_power"
+
+[[site]]
+address = "_sum/GridActivePower"
+metric = "grid_power"
+
+[[site]]
+address = "_sum/EssActivePower"
+metric = "battery_power"
+
+[[site]]
+address = "_sum/EssSoc"
+metric = "battery_soc"
+
+[[site]]
+address = "_sum/ProductionActiveEnergy"
+metric = "production_energy"
+
+[[site]]
+address = "_sum/ConsumptionActiveEnergy"
+metric = "consumption_energy"
+
+[[site]]
+address = "_sum/GridBuyActiveEnergy"
+metric = "grid_import_energy"
+
+[[site]]
+address = "_sum/GridSellActiveEnergy"
+metric = "grid_export_energy"
+
+[[site]]
+address = "_sum/EssActiveChargeEnergy"
+metric = "battery_charge_energy"
+
+[[site]]
+address = "_sum/EssActiveDischargeEnergy"
+metric = "battery_discharge_energy"
+
+# ── Per asset type ───────────────────────────────────────────────────────────
+
+[[asset.battery]]
+channel = "ActivePower"
+metric = "battery_power"
+
+[[asset.battery]]
+channel = "Soc"
+metric = "battery_soc"
+
+[[asset.battery]]
+channel = "ActiveChargeEnergy"
+metric = "battery_charge_energy"
+
+[[asset.battery]]
+channel = "ActiveDischargeEnergy"
+metric = "battery_discharge_energy"
+
+[[asset.battery]]
+channel = "ReactivePower"
+metric = "reactive_power"
+
+[[asset.solar]]
+channel = "ActivePower"
+metric = "production_power"
+
+[[asset.solar]]
+channel = "ActiveProductionEnergy"
+metric = "production_energy"
+
+[[asset.solar]]
+channel = "ReactivePower"
+metric = "reactive_power"
+
+[[asset.wind]]
+channel = "ActivePower"
+metric = "production_power"
+
+[[asset.wind]]
+channel = "ActiveProductionEnergy"
+metric = "production_energy"
+
+[[asset.wind]]
+channel = "ReactivePower"
+metric = "reactive_power"
+
+[[asset.meter]]
+channel = "ActivePower"
+metric = "grid_power"
+
+[[asset.meter]]
+channel = "ReactivePower"
+metric = "reactive_power"
+
+[[asset.meter]]
+channel = "Voltage"   # OpenEMS reports mV
+metric = "voltage"
+scale = 0.001
+
+[[asset.meter]]
+channel = "Current"   # OpenEMS reports mA
+metric = "current"
+scale = 0.001
