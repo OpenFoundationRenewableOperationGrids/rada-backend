@@ -74,12 +74,18 @@ Databases created before Alembic already have the baseline schema (revision `000
      ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION,
      ADD COLUMN IF NOT EXISTS edge_id   VARCHAR;
    ```
-4. Build the new image as in the usual deploy sequence (README §9), but do not start it yet.
-5. Confirm the API's service name first, since the stamp runs in a one-off container of that service:
+4. Check TimescaleDB. Revision 0004 runs `CREATE EXTENSION IF NOT EXISTS timescaledb`, which needs a superuser when the extension is not installed in that database yet:
+   ```sql
+   \dx timescaledb
+   ```
+   If it is listed, nothing to do. If not, have a superuser run `CREATE EXTENSION timescaledb;` in that database first (the server must load it: `shared_preload_libraries`).
+   `state_of_charge` may already be a hypertable there (set up by hand before Alembic): that is fine, since 0004 does not touch it. If TimescaleDB gave it a default index (for example `state_of_charge_timestamp_idx`), that index is not in the models, so `alembic check` run against that database would report it; the container never runs `alembic check`, and nothing else is affected.
+5. Build the new image as in the usual deploy sequence (README §9), but do not start it yet.
+6. Confirm the API's service name first, since the stamp runs in a one-off container of that service:
    ```bash
    sudo docker compose -f /var/www/docker-compose.yml config --services
    ```
-6. Stamp from a one-off container of the new image, then start the API. On start-up it runs `alembic upgrade head`, which applies every revision after the baseline.
+7. Stamp from a one-off container of the new image, then start the API. On start-up it runs `alembic upgrade head`, which applies every revision after the baseline.
 
    | Environment | Service |
    |---|---|
@@ -103,7 +109,7 @@ Databases created before Alembic already have the baseline schema (revision `000
    sudo docker compose -f /var/www/docker-compose.yml exec grid-api alembic current
    ```
    The last command must show `(head)`.
-7. Check that the metric catalogue loaded. The container loads it itself on every start; the log must show `Metric catalogue loaded: …` (67 rows added on the first start, 0 afterwards):
+8. Check that the metric catalogue loaded. The container loads it itself on every start; the log must show `Metric catalogue loaded: …` (67 rows added on the first start, 0 afterwards):
    ```bash
    sudo docker compose -f /var/www/docker-compose.yml logs <service> | grep "Metric catalogue"
    ```
@@ -197,12 +203,18 @@ Les bases créées avant Alembic ont déjà le schéma de référence (révision
      ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION,
      ADD COLUMN IF NOT EXISTS edge_id   VARCHAR;
    ```
-4. Construire la nouvelle image comme dans la séquence de déploiement habituelle (README §9), sans la démarrer.
-5. Confirmer d'abord le nom du service de l'API, car le marquage tourne dans un conteneur ponctuel de ce service :
+4. Vérifier TimescaleDB. La révision 0004 lance `CREATE EXTENSION IF NOT EXISTS timescaledb`, qui demande un superutilisateur quand l'extension n'est pas encore installée dans cette base :
+   ```sql
+   \dx timescaledb
+   ```
+   Si elle apparaît, rien à faire. Sinon, faire lancer `CREATE EXTENSION timescaledb;` dans cette base par un superutilisateur d'abord (le serveur doit la charger : `shared_preload_libraries`).
+   `state_of_charge` est peut-être déjà une hypertable sur cet environnement (mise en place à la main avant Alembic) : c'est sans conséquence, car 0004 n'y touche pas. Si TimescaleDB lui a donné un index par défaut (par exemple `state_of_charge_timestamp_idx`), cet index n'est pas dans les modèles : un `alembic check` lancé sur cette base le signalerait ; le conteneur ne lance jamais `alembic check`, et rien d'autre n'est affecté.
+5. Construire la nouvelle image comme dans la séquence de déploiement habituelle (README §9), sans la démarrer.
+6. Confirmer d'abord le nom du service de l'API, car le marquage tourne dans un conteneur ponctuel de ce service :
    ```bash
    sudo docker compose -f /var/www/docker-compose.yml config --services
    ```
-6. Marquer la base depuis un conteneur ponctuel de la nouvelle image, puis démarrer l'API. Au démarrage, elle lance `alembic upgrade head`, qui applique toutes les révisions postérieures à la référence.
+7. Marquer la base depuis un conteneur ponctuel de la nouvelle image, puis démarrer l'API. Au démarrage, elle lance `alembic upgrade head`, qui applique toutes les révisions postérieures à la référence.
 
    | Environnement | Service |
    |---|---|
@@ -226,7 +238,7 @@ Les bases créées avant Alembic ont déjà le schéma de référence (révision
    sudo docker compose -f /var/www/docker-compose.yml exec grid-api alembic current
    ```
    La dernière commande doit afficher `(head)`.
-7. Vérifier que le catalogue de métriques est chargé. Le conteneur le charge lui-même à chaque démarrage ; le journal doit afficher `Metric catalogue loaded: …` (67 lignes ajoutées au premier démarrage, 0 ensuite) :
+8. Vérifier que le catalogue de métriques est chargé. Le conteneur le charge lui-même à chaque démarrage ; le journal doit afficher `Metric catalogue loaded: …` (67 lignes ajoutées au premier démarrage, 0 ensuite) :
    ```bash
    sudo docker compose -f /var/www/docker-compose.yml logs <service> | grep "Metric catalogue"
    ```

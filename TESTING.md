@@ -29,6 +29,8 @@ tests/
   test_site_hierarchy.py # contraintes de la hiérarchie des sites et règle transitoire mvp_sites.py
   test_metric_catalogue.py # chargeur seed_metrics.py : idempotent, refus des changements d'unit/kind/level
   test_metric_rules.py   # règle de niveau (triggers), tarifs sans chevauchement, immobilisations
+  test_measurement.py    # hypertable measurement, doublons ignorés, agrégat horaire, downgrade de 0004
+  test_seed_reset.py     # --reset vide toute table qui pointe vers les données de démo
   fixtures/
     mvp_schema.sql       # schéma MVP d'avant Alembic (pg_dump, voir son en-tête pour le régénérer)
 ```

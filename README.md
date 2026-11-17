@@ -559,7 +559,7 @@ Seed scripts run **inside** the running container:
 docker exec grid_api python seed_batteries.py
 ```
 
-The script refuses to run when assets already exist. It loads the metric catalogue first. `--reset` first empties `dispatch_commands`, `state_of_charge`, `grid_signals`, `metric_mapping`, `tariff`, `fixed_asset_link`, `fixed_asset`, `discovered_component`, `assets`, `site` and `portfolio`, which deletes **all** their data, including the assets fed by the OpenEMS bridge and their sites. The catalogue (`language`, `metric`, `metric_translation`) and `source_connection` are kept.
+The script refuses to run when assets already exist. It loads the metric catalogue first. `--reset` first empties `dispatch_commands`, `state_of_charge`, `grid_signals`, `measurement`, `metric_mapping`, `tariff`, `fixed_asset_link`, `fixed_asset`, `discovered_component`, `assets`, `site` and `portfolio`, which deletes **all** their data, including the assets fed by the OpenEMS bridge and their sites. The catalogue (`language`, `metric`, `metric_translation`) and `source_connection` are kept.
 
 ### Traefik & SSL
 

@@ -306,7 +306,7 @@ def make_grid_signals() -> list:
 
 # Demo data emptied by --reset. source_connection is configuration and stays.
 RESET_TABLES = (
-    "dispatch_commands", "state_of_charge", "grid_signals",
+    "dispatch_commands", "state_of_charge", "grid_signals", "measurement",
     "metric_mapping", "tariff", "fixed_asset_link", "fixed_asset",
     "discovered_component", "assets", "site", "portfolio",
 )

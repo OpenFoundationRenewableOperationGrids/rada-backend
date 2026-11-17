@@ -66,6 +66,7 @@ def clean_tables():
     session = database.SessionLocal()
     try:
         # Children before parents, so no foreign key is left pointing at a deleted row
+        session.execute(models.measurement.delete())  # a Table, not a model class
         for model in (
             models.DispatchCommand, models.StateOfCharge,
             models.MetricMapping, models.Tariff, models.FixedAssetLink, models.FixedAsset,

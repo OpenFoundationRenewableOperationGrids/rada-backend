@@ -21,7 +21,8 @@ MVP_SCHEMA = Path(__file__).parent / "fixtures" / "mvp_schema.sql"
 # What `alembic check` cannot see: it ignores CHECK and exclusion constraints,
 # triggers and functions, so a migration that forgets one passes it silently.
 # Every ck_*/ex_* constraint, trigger or function added by a later migration
-# must be added to these lists (step 3's measurement triggers will be the first).
+# must be added to these lists. Objects of extensions (timescaledb, btree_gist)
+# are left out: they are not ours.
 UNCHECKED_CONSTRAINTS = {
     "ck_portfolio_currency_iso4217", "ck_site_currency_iso4217",
     "ck_metric_key_format",
@@ -31,6 +32,7 @@ UNCHECKED_CONSTRAINTS = {
 UNCHECKED_TRIGGERS = {
     ("metric_mapping", "metric_mapping_check_level"),
     ("metric", "metric_check_level_change"),
+    ("measurement", "measurement_check_level"),
 }
 UNCHECKED_FUNCTIONS = {"check_metric_level", "check_metric_level_change"}
 MVP_DB = "rada_mvp_test"  # ends in _test, like every database the tests reset
@@ -52,9 +54,12 @@ def test_objects_alembic_check_cannot_see_are_all_there():
             SELECT c.conname FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace
             WHERE n.nspname = 'public' AND c.contype IN ('c', 'x')
         """)).scalars())
+        # TimescaleDB adds triggers of its own (metadata_insert_trigger): their
+        # functions belong to the extension
         triggers = {tuple(row) for row in conn.execute(text("""
             SELECT t.tgrelid::regclass::text, t.tgname FROM pg_trigger t
             WHERE NOT t.tgisinternal
+              AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = t.tgfoid AND d.deptype = 'e')
         """))}
         # Functions of extensions (timescaledb, btree_gist) also live in public: leave them out
         functions = set(conn.execute(text("""

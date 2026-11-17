@@ -5,14 +5,15 @@ SQLAlchemy ORM models — the database schema, kept in step with the Alembic
 migrations (docs/MIGRATIONS.md). Defines the V1.0 site hierarchy (Portfolio,
 SourceConnection, Site, DiscoveredComponent; docs/DATA_MODEL.md §2), the
 metric catalogue (Language, Metric, MetricTranslation, MetricMapping; §2-§3),
-the finance tables (Tariff, FixedAsset, FixedAssetLink; §5) and the MVP tables: Asset (batteries, solar and wind farms, now attached to a site),
-their StateOfCharge/telemetry history, grid-wide GridSignal readings, and
-DispatchCommand records sent to assets.
+the finance tables (Tariff, FixedAsset, FixedAssetLink; §5), the measurement
+hypertable (§4) and the MVP tables: Asset (batteries, solar and wind farms,
+now attached to a site), their StateOfCharge/telemetry history, grid-wide
+GridSignal readings, and DispatchCommand records sent to assets.
 """
 
 from sqlalchemy import (
-    CHAR, Boolean, CheckConstraint, Column, Date, DateTime, Float, ForeignKey,
-    ForeignKeyConstraint, Index, Integer, Numeric, String, Text,
+    CHAR, Boolean, CheckConstraint, Column, Date, DateTime, Double, Float, ForeignKey,
+    ForeignKeyConstraint, Index, Integer, Numeric, String, Table, Text,
     UniqueConstraint, func, text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, ExcludeConstraint
@@ -308,6 +309,35 @@ class FixedAssetLink(ReferenceMixin, Base):
     __table_args__ = (
         UniqueConstraint("fixed_asset_id", "asset_id", name="uq_fixed_asset_link_pair"),
     )
+
+
+# A plain Table, not an ORM class: the ORM needs a primary key, and none fits
+# (asset_id is nullable). Rows are written with Core
+# INSERT ... ON CONFLICT DO NOTHING, so a value sent twice is stored once.
+#
+# Revision 0004 also makes it a TimescaleDB hypertable on time (without
+# TimescaleDB's default index: ix_measurement_time below replaces it), adds the
+# level-rule trigger (as on metric_mapping), and builds the measurement_hourly
+# continuous aggregate on it. The aggregate is a view: it is not in the models.
+measurement = Table(
+    "measurement", Base.metadata,
+    Column("time", DateTime(timezone=True), nullable=False),  # partitioning column
+    Column("site_id", Integer, ForeignKey("site.id"), nullable=False),  # also on asset rows: no join for site queries
+    Column("asset_id", Integer, nullable=True),  # empty means a site-wide value
+    Column("metric_id", Integer, ForeignKey("metric.id"), nullable=False),
+    Column("value", Double, nullable=False),  # in the metric's unit
+    Column("source", Text, nullable=False),  # who wrote it: bridge-openems, simulator, seed, csv
+    # The asset must belong to the site (not checked while asset_id is empty)
+    ForeignKeyConstraint(["asset_id", "site_id"], ["assets.id", "assets.site_id"], name="fk_measurement_asset_site"),
+    # One row per time, site, asset and metric; an empty asset counts as a value.
+    # TimescaleDB requires the time column in every unique index of a hypertable.
+    Index(
+        "uq_measurement_point", "metric_id", "site_id", "asset_id", "time",
+        unique=True, postgresql_nulls_not_distinct=True,
+    ),
+)
+# For scans by time alone, such as the hourly aggregate's refresh
+Index("ix_measurement_time", measurement.c.time.desc())
 
 
 class Asset(Base):

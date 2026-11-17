@@ -4,7 +4,7 @@
 
 Target schema for V1.0. Table and column names are proposals until the BE-03 migrations are approved; after that, this file follows the migrations.
 
-Status: kickoff draft of 11 October 2026, updated for BE-02 (#30) on 14 November 2026 with the decisions from the BE-01 findings (`docs/b2b-findings.md`) and the BE-02/BE-03 working session.
+Status: kickoff draft of 11 October 2026, updated for BE-02 (#30) on 14 November 2026 with the decisions from the BE-01 findings (`docs/b2b-findings.md`) and the BE-02/BE-03 working session, and for BE-03 (#31) on 17 November 2026. **The schema now follows the Alembic migrations** (`alembic/versions/`, see `docs/MIGRATIONS.md`): where this file and the migrations differ, the migrations are right and this file is to be fixed.
 
 ## §1 Overview
 
@@ -230,7 +230,7 @@ Shipped with RADA, charted and exported, with no KPI in 1.0.
 | `voltage` | Voltage / Tension / Spannung | V | instantaneous | asset | meter `Voltage`, scale 0.001 | OpenEMS reports mV |
 | `current` | Current / Courant / Strom | A | instantaneous | asset | meter `Current`, scale 0.001 | OpenEMS reports mA |
 | `temperature` | Temperature / Température / Temperatur | °C | instantaneous | asset | — | Vendor-specific channel, mapped by hand |
-| `battery_stored_energy` | Stored energy / Énergie stockée / Gespeicherte Energie | Wh | state | asset | — | Holds the MVP history only; OpenEMS does not report it |
+| `battery_stored_energy` | Stored energy / Énergie stockée / Gespeicherte Energie | Wh | state | asset | — | OpenEMS does not report it. It was to hold the MVP history, which is not copied (§6.1): unused until a writer such as the demo seed posts it |
 
 Not carried over: `power_factor` (calculated from active and reactive power when needed) and the OpenEMS energy-flow counters (`ProductionToEssEnergy` and the others), which follow an allocation rule rather than a measurement. An administrator can still map them as custom metrics.
 
@@ -275,15 +275,25 @@ Anything else on the edge is left for the administrator to map as a custom metri
 | asset_id | FK asset, nullable | Empty means a site-wide value |
 | metric_id | FK metric | |
 | value | double precision | In the metric's unit |
-| source | text | Who wrote the row: `bridge-openems`, `simulator`, `seed`, `mvp-migration`, `csv` |
+| source | text | Who wrote the row: `bridge-openems`, `simulator`, `seed`, `csv` |
 
-- One row per time, site, asset and metric. A value sent twice is stored once.
-- Implementation note for BE-03: the uniqueness rule must treat an empty `asset_id` as a value. Use a unique index with `NULLS NOT DISTINCT` if the pinned TimescaleDB version accepts it on a hypertable; the fallback is a non-null `asset_id` with 0 meaning site-wide.
+- A TimescaleDB hypertable on `time`, with 7-day chunks (revision 0004). It has no primary key and is a plain `Table` in `models.py`.
+- One row per time, site, asset and metric. A value sent twice is stored once: writers use `INSERT … ON CONFLICT DO NOTHING`.
+- **Uniqueness (decision of BE-03):** `uq_measurement_point`, a unique index on (`metric_id`, `site_id`, `asset_id`, `time`) `NULLS NOT DISTINCT`, so an empty `asset_id` counts as a value. TimescaleDB 2.32 (pinned) accepts it on a hypertable, so the fallback (a non-null `asset_id` with 0 meaning site-wide) is not used. TimescaleDB requires `time` in every unique index of a hypertable. The column order serves chart queries (metric, site, asset, time range) and the level-change guard.
+- `ix_measurement_time` (`time DESC`) replaces TimescaleDB's default index, which is not created, so `alembic check` sees every index.
+- The asset must belong to the site (composite foreign key `fk_measurement_asset_site`), and the level rule of §3.1 applies through the `check_metric_level('measurement')` trigger, as on `metric_mapping`.
+- **For the demo seed (later PR):** the level trigger adds about 40 µs per row to bulk inserts (200,000 rows: 28 s with it, 20 s without). A statement-level check is not possible: TimescaleDB does not support transition tables on hypertables.
+- **Constraint names on chunks:** each chunk has its own copy of the indexes, so a duplicate refused by `uq_measurement_point` is reported under the chunk's name, for example `_hyper_1_2_chunk_uq_measurement_point`. Writers using `ON CONFLICT DO NOTHING` never see it; code matching on the name must match its end. `ck_metric_level` and `fk_measurement_asset_site` keep their names.
 - Raw rows are kept. Compression and retention policies are an open item (`SPEC.md` §15, O8).
 
 ### measurement_hourly (continuous aggregate)
 
 Per hour in UTC, per site, asset and metric: average, minimum, maximum, first and last value, and sample count. It serves charts over long ranges. It needs TimescaleDB Community Edition.
+
+- Columns: `bucket`, `site_id`, `asset_id`, `metric_id`, `avg_value`, `min_value`, `max_value`, `first_value`, `last_value`, `sample_count`.
+- **Real-time aggregation** (`materialized_only = false`): queries add the rows not materialised yet, so the current hour shows at once.
+- **Refresh policy:** every 30 minutes, from 3 days ago to 1 hour ago, so late data of up to 3 days is picked up.
+- **Data older than 3 days is not refreshed automatically.** Whoever writes it must call `CALL refresh_continuous_aggregate('measurement_hourly', <from>, <to>)` for that range, outside a transaction: the CSV import (BE-06) for its imported range, and any long backfill.
 
 ### site_daily
 
@@ -311,7 +321,7 @@ One row per asset and local day: `energy_wh` for a generating asset, `charge_wh`
 
 ### Existing MVP tables
 
-- `state_of_charge` is copied into `measurement` (§6) and kept read-only until the front end has switched.
+- `state_of_charge` is not copied into `measurement` (decision of 15 November 2026, §6.1). It keeps working as it is (the bridge and the simulator still write to `state_of_charge`) until the front end and the bridge have switched.
 - `dispatch_commands` is unchanged.
 - `grid_signals` is unchanged and unused by V1.0 (front-of-the-meter, out of scope).
 
@@ -395,20 +405,7 @@ These one-site-per-asset sites are a transitional mapping of the MVP fleet, repl
 - An MVP asset only joins an edge's site while that site has no connection. Once BE-05 links `edge0` to a Backend, a new MVP asset on `edge0` gets a new site with no connection, because edge IDs are only unique within one Backend and the MVP request does not say which.
 - The first two concurrent requests on an empty install can both try to create the `Demo` portfolio; the unique name refuses the second, which fails with a server error.
 
-**Measurements.** Each `state_of_charge` row becomes up to six asset-level rows, with `source = mvp-migration`:
-
-| MVP column | Metric | Conversion | Note |
-|---|---|---|---|
-| `power_mw` | `battery_power` (battery) or `production_power` (solar, wind) | ×10⁶ | |
-| `energy_mwh` | `battery_stored_energy` | ×10⁶ | Batteries only; 0 by convention for solar and wind, not copied |
-| `reactive_power_mvar` | `reactive_power` | ×10⁶ | |
-| `voltage` | `voltage` | none | |
-| `current_amps` | `current` | none | |
-| `temperature_celsius` | `temperature` | none | |
-| `power_factor` | — | | Not copied: calculated when needed |
-| `operational_mode`, `asset_status` | — | | Not copied: the site status comes from `last_seen_at` |
-
-Empty source values are not copied. Verification: the row count per metric equals the count of non-empty values in the source column.
+**Measurements.** Not copied (decision of 15 November 2026): the MVP history is simulated, and the demo is reseeded. `state_of_charge` and the MVP endpoints keep working as they are (the bridge and the simulator still write to `state_of_charge`) until the front end and the bridge have switched to the new endpoints.
 
 ## §7 Demo data
 
@@ -443,7 +440,7 @@ The seed script no longer creates or drops tables: migrations create the schema,
 
 Schéma cible de la V1.0. Les noms de tables et de colonnes sont des propositions jusqu'à l'approbation des migrations BE-03 ; ensuite, ce fichier suit les migrations.
 
-Statut : brouillon du lancement du 11 octobre 2026, mis à jour pour BE-02 (#30) le 14 novembre 2026 avec les décisions issues des constats BE-01 (`docs/b2b-findings.md`) et de la session de travail BE-02/BE-03.
+Statut : brouillon du lancement du 11 octobre 2026, mis à jour pour BE-02 (#30) le 14 novembre 2026 avec les décisions issues des constats BE-01 (`docs/b2b-findings.md`) et de la session de travail BE-02/BE-03, puis pour BE-03 (#31) le 17 novembre 2026. **Le schéma suit désormais les migrations Alembic** (`alembic/versions/`, voir `docs/MIGRATIONS.md`) : quand ce fichier et les migrations diffèrent, les migrations font foi et ce fichier est à corriger.
 
 ## §1 Vue d'ensemble
 
@@ -639,7 +636,7 @@ Livrées avec RADA, affichées et exportées, sans KPI en 1.0.
 | `voltage` | V | instantanée | asset | compteur `Voltage`, échelle 0,001 | OpenEMS rapporte des mV |
 | `current` | A | instantanée | asset | compteur `Current`, échelle 0,001 | OpenEMS rapporte des mA |
 | `temperature` | °C | instantanée | asset | — | Channel propre au fabricant, mappé à la main |
-| `battery_stored_energy` | Wh | état | asset | — | Ne contient que l'historique MVP ; OpenEMS ne la rapporte pas |
+| `battery_stored_energy` | Wh | état | asset | — | OpenEMS ne la rapporte pas. Elle devait contenir l'historique MVP, qui n'est pas copié (§6.1) : inutilisée tant qu'aucun rédacteur, comme le seed de démo, ne l'envoie |
 
 Non repris : `power_factor` (calculé à partir des puissances active et réactive à la demande) et les compteurs de flux d'énergie OpenEMS (`ProductionToEssEnergy` et les autres), qui relèvent d'une règle d'affectation et non d'une mesure. Un administrateur peut toujours les mapper comme métriques personnalisées.
 
@@ -684,15 +681,25 @@ Tout autre channel de l'edge est laissé à l'administrateur, qui peut le mapper
 | asset_id | FK asset, nullable | Vide = valeur à l'échelle du site |
 | metric_id | FK metric | |
 | value | double precision | Dans l'unité de la métrique |
-| source | text | Qui a écrit la ligne : `bridge-openems`, `simulator`, `seed`, `mvp-migration`, `csv` |
+| source | text | Qui a écrit la ligne : `bridge-openems`, `simulator`, `seed`, `csv` |
 
-- Une ligne par instant, site, actif et métrique. Une valeur envoyée deux fois n'est stockée qu'une fois.
-- Note de mise en œuvre pour BE-03 : la règle d'unicité doit traiter un `asset_id` vide comme une valeur. Utiliser un index unique `NULLS NOT DISTINCT` si la version épinglée de TimescaleDB l'accepte sur une hypertable ; sinon, `asset_id` non nul avec 0 pour « tout le site ».
+- Une hypertable TimescaleDB sur `time`, en tranches de 7 jours (révision 0004). Elle n'a pas de clé primaire et est une `Table` simple dans `models.py`.
+- Une ligne par instant, site, actif et métrique. Une valeur envoyée deux fois n'est stockée qu'une fois : les rédacteurs utilisent `INSERT … ON CONFLICT DO NOTHING`.
+- **Unicité (décision de BE-03) :** `uq_measurement_point`, un index unique sur (`metric_id`, `site_id`, `asset_id`, `time`) `NULLS NOT DISTINCT`, pour qu'un `asset_id` vide compte comme une valeur. TimescaleDB 2.32 (épinglée) l'accepte sur une hypertable : le repli (`asset_id` non nul avec 0 pour « tout le site ») n'est pas utilisé. TimescaleDB exige `time` dans tout index unique d'une hypertable. L'ordre des colonnes sert les requêtes des graphiques (métrique, site, actif, plage de temps) et le garde-fou de changement de niveau.
+- `ix_measurement_time` (`time DESC`) remplace l'index par défaut de TimescaleDB, qui n'est pas créé, pour qu'`alembic check` voie tous les index.
+- L'actif doit appartenir au site (clé étrangère composite `fk_measurement_asset_site`), et la règle de niveau du §3.1 s'applique par le trigger `check_metric_level('measurement')`, comme sur `metric_mapping`.
+- **Pour le seed de démo (PR ultérieure) :** le trigger de niveau ajoute environ 40 µs par ligne aux insertions en masse (200 000 lignes : 28 s avec, 20 s sans). Un contrôle par instruction n'est pas possible : TimescaleDB ne prend pas en charge les tables de transition sur les hypertables.
+- **Noms de contraintes sur les tranches :** chaque tranche a sa propre copie des index ; un doublon refusé par `uq_measurement_point` est donc signalé sous le nom de la tranche, par exemple `_hyper_1_2_chunk_uq_measurement_point`. Les rédacteurs utilisant `ON CONFLICT DO NOTHING` ne le voient jamais ; un code qui compare ce nom doit en comparer la fin. `ck_metric_level` et `fk_measurement_asset_site` gardent leur nom.
 - Les lignes brutes sont conservées. Les politiques de compression et de rétention sont un point ouvert (`SPEC.md` §15, O8).
 
 ### measurement_hourly (agrégat continu)
 
 Par heure UTC, par site, actif et métrique : moyenne, minimum, maximum, première et dernière valeur, et nombre d'échantillons. Il sert aux graphiques sur de longues périodes. Il exige TimescaleDB Community Edition.
+
+- Colonnes : `bucket`, `site_id`, `asset_id`, `metric_id`, `avg_value`, `min_value`, `max_value`, `first_value`, `last_value`, `sample_count`.
+- **Agrégation en temps réel** (`materialized_only = false`) : les requêtes ajoutent les lignes pas encore matérialisées, l'heure en cours apparaît donc tout de suite.
+- **Politique de rafraîchissement :** toutes les 30 minutes, d'il y a 3 jours à il y a 1 heure, pour prendre en compte les données arrivées jusqu'à 3 jours en retard.
+- **Les données de plus de 3 jours ne sont pas rafraîchies automatiquement.** Qui les écrit doit appeler `CALL refresh_continuous_aggregate('measurement_hourly', <début>, <fin>)` pour cette plage, hors transaction : l'import CSV (BE-06) pour la plage importée, et toute reprise longue.
 
 ### site_daily
 
@@ -706,7 +713,7 @@ Une ligne par actif et par jour local : `energy_wh` pour un actif producteur, `c
 
 ### Tables MVP existantes
 
-- `state_of_charge` est copiée dans `measurement` (§6) et conservée en lecture seule jusqu'à la bascule du front.
+- `state_of_charge` n'est pas copiée dans `measurement` (décision du 15 novembre 2026, §6.1). Elle continue de fonctionner telle quelle (le bridge et le simulateur écrivent toujours dans `state_of_charge`) jusqu'à la bascule du front et du bridge.
 - `dispatch_commands` est inchangée.
 - `grid_signals` est inchangée et inutilisée en V1.0 (devant le compteur, hors périmètre).
 
@@ -744,20 +751,7 @@ Ces sites « un par actif » sont une correspondance transitoire du parc MVP, re
 - Un actif MVP ne rejoint le site d'un edge que tant que ce site n'a pas de connexion. Une fois `edge0` relié à un Backend par BE-05, un nouvel actif MVP sur `edge0` reçoit un nouveau site sans connexion, car les identifiants d'edge ne sont uniques qu'au sein d'un Backend et la requête MVP ne dit pas lequel.
 - Les deux premières requêtes simultanées sur une installation vide peuvent toutes deux tenter de créer le portefeuille `Demo` ; le nom unique refuse la seconde, qui échoue avec une erreur serveur.
 
-**Mesures.** Chaque ligne de `state_of_charge` devient jusqu'à six lignes au niveau actif, avec `source = mvp-migration` :
-
-| Colonne MVP | Métrique | Conversion | Note |
-|---|---|---|---|
-| `power_mw` | `battery_power` (batterie) ou `production_power` (solaire, éolien) | ×10⁶ | |
-| `energy_mwh` | `battery_stored_energy` | ×10⁶ | Batteries uniquement ; 0 par convention pour le solaire et l'éolien, non copié |
-| `reactive_power_mvar` | `reactive_power` | ×10⁶ | |
-| `voltage` | `voltage` | aucune | |
-| `current_amps` | `current` | aucune | |
-| `temperature_celsius` | `temperature` | aucune | |
-| `power_factor` | — | | Non copié : calculé à la demande |
-| `operational_mode`, `asset_status` | — | | Non copiés : l'état du site vient de `last_seen_at` |
-
-Les valeurs source vides ne sont pas copiées. Vérification : le nombre de lignes par métrique est égal au nombre de valeurs non vides de la colonne source.
+**Mesures.** Non copiées (décision du 15 novembre 2026) : l'historique du MVP est simulé et la démo est rechargée. `state_of_charge` et les endpoints MVP continuent de fonctionner tels quels (le bridge et le simulateur écrivent toujours dans `state_of_charge`) jusqu'à la bascule du front et du bridge sur les nouveaux endpoints.
 
 ## §7 Données de démonstration
 
