@@ -158,6 +158,7 @@ rada-backend/
 ├── seed_batteries.py       # Seeds 30 days of history for batteries, solar and wind farms
 │                           #   (run after `alembic upgrade head`; --reset empties the demo data)
 ├── mvp_sites.py            # Transitional: gives each new MVP asset a site (DATA_MODEL.md §6.1)
+├── seed_metrics.py         # Loads the metric catalogue (seeds/metrics.toml); run on every container start
 ├── grid_signal_fetcher.py  # RTE grid signals — not wired into main.py yet
 ├── alembic/, alembic.ini   # Database migrations (see docs/MIGRATIONS.md)
 ├── bridge/                 # OpenEMS bridge: reads OpenEMS Backends over B2B and posts
@@ -530,7 +531,7 @@ The VPS (Hetzner CAX11, **ARM64**, Ubuntu) runs Docker Compose at `/var/www/dock
 
 ### Upgrading an existing database
 
-The API container runs `alembic upgrade head` before it starts, so pending migrations are applied on every deploy. A database created before Alembic must be stamped once first: follow the one-off upgrade in [docs/MIGRATIONS.md](docs/MIGRATIONS.md).
+The API container runs `alembic upgrade head` and then `python seed_metrics.py` before it starts, so pending migrations and the metric catalogue are applied on every deploy. If either fails, the API does not start: see [docs/MIGRATIONS.md](docs/MIGRATIONS.md#api-container-wont-start-after-a-deploy). A database created before Alembic must be stamped once first: follow the one-off upgrade in [docs/MIGRATIONS.md](docs/MIGRATIONS.md).
 
 > **Stamp before the new image starts.** On a database that is not stamped, the migrations fail and the API container does not start.
 
@@ -558,7 +559,7 @@ Seed scripts run **inside** the running container:
 docker exec grid_api python seed_batteries.py
 ```
 
-The script refuses to run when assets already exist. `--reset` first empties `dispatch_commands`, `state_of_charge`, `grid_signals`, `discovered_component`, `assets`, `site` and `portfolio`, which deletes **all** their data, including the assets fed by the OpenEMS bridge and their sites. `source_connection` is configuration and is kept.
+The script refuses to run when assets already exist. It loads the metric catalogue first. `--reset` first empties `dispatch_commands`, `state_of_charge`, `grid_signals`, `metric_mapping`, `tariff`, `fixed_asset_link`, `fixed_asset`, `discovered_component`, `assets`, `site` and `portfolio`, which deletes **all** their data, including the assets fed by the OpenEMS bridge and their sites. The catalogue (`language`, `metric`, `metric_translation`) and `source_connection` are kept.
 
 ### Traefik & SSL
 

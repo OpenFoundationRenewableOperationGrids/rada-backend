@@ -27,6 +27,8 @@ tests/
   test_migrations.py     # modèles et migrations Alembic alignés, une seule tête, downgrade/upgrade,
                          #   et montée d'une copie du schéma MVP (stamp 0001 puis upgrade head)
   test_site_hierarchy.py # contraintes de la hiérarchie des sites et règle transitoire mvp_sites.py
+  test_metric_catalogue.py # chargeur seed_metrics.py : idempotent, refus des changements d'unit/kind/level
+  test_metric_rules.py   # règle de niveau (triggers), tarifs sans chevauchement, immobilisations
   fixtures/
     mvp_schema.sql       # schéma MVP d'avant Alembic (pg_dump, voir son en-tête pour le régénérer)
 ```
@@ -120,6 +122,12 @@ Points clés :
 | `clean_tables` (`autouse=True`) | Vide les tables des actifs et des sites (`dispatch_commands`, `state_of_charge`, `discovered_component`, `assets`, `site`, `source_connection`, `portfolio`) avant **chaque** test pour qu'ils ne se polluent pas entre eux |
 | `client` | `TestClient` FastAPI prêt à l'emploi, injecté par son nom dans un test |
 | `auth_headers` | Dict `{"X-API-Key": "test-api-key"}` à passer dans `headers=` de chaque requête vers une route protégée |
+
+`alembic check` ne voit ni les contraintes CHECK ou d'exclusion, ni les triggers, ni les fonctions.
+`test_migrations.py::test_objects_alembic_check_cannot_see_are_all_there` vérifie donc qu'après
+`upgrade head` ils sont exactement ceux de ses listes : toute migration qui en ajoute un doit
+compléter ces listes. Les règles elles-mêmes sont testées par insertion dans
+`test_site_hierarchy.py` et `test_metric_rules.py`.
 
 `test_migrations.py` vérifie que `models.py` et les révisions de `alembic/versions/` décrivent le
 même schéma (l'équivalent d'`alembic check`), qu'il n'y a qu'une seule tête de migration, et que

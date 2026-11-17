@@ -43,7 +43,7 @@ flowchart TD
 Conventions:
 
 - Timestamps are `timestamptz`, stored in UTC.
-- Every reference table has `id`, `created_at` and `updated_at`. They are omitted from the tables below.
+- Every reference table has `id`, `created_at` and `updated_at`. They are omitted from the tables below. Two tables have a natural key instead of `id`: `language` (its code) and `metric_translation` (metric and language).
 - Reference rows are deactivated (`is_active`), not deleted, so history stays consistent.
 - **Storage units are W, Wh, var and %**, as OpenEMS reports them (confirmed on the live edge, 7 November 2026). The front end displays kW, kWh and kvar (MW and MWh where values are large).
 - **Languages are data.** Translated text lives in `…_translation` tables keyed by language, so a language is added without a schema change. English, French and German ship out of the box (German matches the OpenEMS vocabulary). V1.0 translates the metric catalogue; the interface itself is in English and French.
@@ -142,6 +142,9 @@ The catalogue of what can be measured.
 
 Display names and sign notes are in `metric_translation`. Core and optional metrics ship with RADA (seed file `seeds/metrics.toml`) and cannot be deleted. Custom metrics are created by an administrator.
 
+- `key` is lowercase letters, digits and `_`, starting with a letter (`ck_metric_key_format`).
+- **Loading the catalogue.** `seed_metrics.py` loads `seeds/metrics.toml` on every API container start and from the demo seed; a run with nothing new writes no row. It adds languages, metrics and translations and updates names, sign notes and a metric's category. It sets the default language only while the install has none, so an administrator's choice survives restarts. It refuses, naming the metric, to change the `unit`, `kind` or `level` of an existing metric (rows were stored under them: that needs a migration), to reuse a custom metric's key, or to create a custom metric. It never deletes.
+
 ### language
 
 The languages an install supports.
@@ -150,7 +153,7 @@ The languages an install supports.
 |---|---|---|
 | code | text, primary key | BCP 47 code: `en`, `fr`, `de` |
 | name | text | The language's own name: English, Français, Deutsch |
-| is_default | boolean | Exactly one row; `en` out of the box. Used when a translation is missing |
+| is_default | boolean | Exactly one row; `en` out of the box. Used when a translation is missing. The database allows at most one (`uq_language_single_default`); the catalogue loader sets one when there is none |
 | is_active | boolean | |
 
 ### metric_translation
@@ -182,6 +185,9 @@ Which source channel feeds which metric. Read and applied by the bridge.
 | is_enabled | boolean | |
 
 Unique on (`site_id`, `source`, `source_address`). The edge is not repeated: it comes from the site.
+
+- "Must belong to the site" is a composite foreign key on (`asset_id`, `site_id`).
+- The level rule (§3.1) is a trigger, `check_metric_level()`, raised as `ck_metric_level`. A second trigger refuses a change of a metric's `level` that existing rows contradict. `measurement` (§4) uses the same rule.
 
 ## §3 Metrics
 
@@ -316,8 +322,8 @@ One row per asset and local day: `energy_wh` for a generating asset, `charge_wh`
 | Column | Type | Notes |
 |---|---|---|
 | site_id | FK site | |
-| valid_from, valid_to | date | `valid_to` empty means open-ended; periods for one site cannot overlap |
-| import_price_per_kwh, export_price_per_kwh | numeric(10,6) | |
+| valid_from, valid_to | date | Both inclusive: a period ending 31 December is followed by one starting 1 January. `valid_to` empty means open-ended. Periods for one site cannot overlap (`ex_tariff_no_overlap`, which needs the `btree_gist` extension) |
+| import_price_per_kwh, export_price_per_kwh | numeric(10,6) | Price per **kWh**, in `currency`. Energy is stored in Wh: divide by 1000 before pricing |
 | currency | char(3) | |
 | label | text, nullable | For example the supplier and contract name |
 
@@ -341,6 +347,8 @@ The finance view of an asset. Filled in directly by an organisation with no ERP;
 ### fixed_asset_link
 
 `fixed_asset_id` and `asset_id`, unique as a pair. Several operational assets can belong to one fixed asset. Whether one asset can be split across several fixed assets is an open item (`SPEC.md` §15, O7).
+
+Open item, to be added to `SPEC.md` §15: whether a fixed asset may be linked to an asset whose site belongs to another portfolio. Nothing enforces it in 1.0.
 
 ### app_user
 
@@ -404,7 +412,7 @@ Empty source values are not copied. Verification: the row count per metric equal
 
 ## §7 Demo data
 
-The seed script no longer creates or drops tables: migrations create the schema, and the seed only adds rows. `--reset` empties the data tables first. It loads the metric catalogue, then a behind-the-meter demo portfolio at commercial and community scale, never domestic:
+The seed script no longer creates or drops tables: migrations create the schema, and the seed only adds rows. `--reset` empties the data tables first, but never the catalogue (`language`, `metric`, `metric_translation`) or `source_connection`. It loads the metric catalogue, then a behind-the-meter demo portfolio at commercial and community scale, never domestic:
 
 | Portfolio | Site | PV | Battery | Wind | Time zone |
 |---|---|---|---|---|---|
@@ -444,7 +452,7 @@ Le diagramme est celui de la partie anglaise ci-dessus.
 Conventions :
 
 - Les horodatages sont en `timestamptz`, stockés en UTC.
-- Chaque table de référence a `id`, `created_at` et `updated_at`. Ils sont omis des tableaux ci-dessous.
+- Chaque table de référence a `id`, `created_at` et `updated_at`. Ils sont omis des tableaux ci-dessous. Deux tables ont une clé naturelle au lieu d'`id` : `language` (son code) et `metric_translation` (métrique et langue).
 - Les lignes de référence sont désactivées (`is_active`), pas supprimées, pour que l'historique reste cohérent.
 - **Les unités de stockage sont W, Wh, var et %**, telles que les rapporte OpenEMS (confirmé sur l'edge en direct le 7 novembre 2026). Le front affiche kW, kWh et kvar (MW et MWh pour les grandes valeurs).
 - **Les langues sont des données.** Les textes traduits sont dans des tables `…_translation` dont la clé inclut la langue : on ajoute une langue sans changer le schéma. L'anglais, le français et l'allemand sont fournis d'emblée (l'allemand correspond au vocabulaire d'OpenEMS). La V1.0 traduit le catalogue de métriques ; l'interface elle-même est en anglais et en français.
@@ -543,6 +551,9 @@ Le catalogue de ce qui peut être mesuré.
 
 Les noms affichés et les notes de signe sont dans `metric_translation`. Les métriques de base et optionnelles sont livrées avec RADA (fichier de seed `seeds/metrics.toml`) et ne peuvent pas être supprimées. Les métriques personnalisées sont créées par un administrateur.
 
+- `key` est en minuscules, chiffres et `_`, et commence par une lettre (`ck_metric_key_format`).
+- **Chargement du catalogue.** `seed_metrics.py` charge `seeds/metrics.toml` à chaque démarrage du conteneur de l'API et depuis le seed de démo ; un passage sans nouveauté n'écrit aucune ligne. Il ajoute langues, métriques et traductions, et met à jour les noms, les notes de signe et la catégorie d'une métrique. Il ne fixe la langue par défaut que tant que l'installation n'en a pas, pour que le choix d'un administrateur survive aux redémarrages. Il refuse, en nommant la métrique, de changer l'`unit`, le `kind` ou le `level` d'une métrique existante (des lignes ont été stockées avec : il faut une migration), de réutiliser la clé d'une métrique personnalisée, ou de créer une métrique personnalisée. Il ne supprime jamais rien.
+
 ### language
 
 Les langues prises en charge par une installation.
@@ -551,7 +562,7 @@ Les langues prises en charge par une installation.
 |---|---|---|
 | code | text, clé primaire | Code BCP 47 : `en`, `fr`, `de` |
 | name | text | Le nom de la langue dans cette langue : English, Français, Deutsch |
-| is_default | boolean | Une seule ligne ; `en` d'emblée. Utilisée quand une traduction manque |
+| is_default | boolean | Une seule ligne ; `en` d'emblée. Utilisée quand une traduction manque. La base en autorise au plus une (`uq_language_single_default`) ; le chargeur du catalogue en fixe une quand il n'y en a pas |
 | is_active | boolean | |
 
 ### metric_translation
@@ -583,6 +594,9 @@ Quel channel source alimente quelle métrique. Lue et appliquée par le bridge.
 | is_enabled | boolean | |
 
 Unique sur (`site_id`, `source`, `source_address`). L'edge n'est pas répété : il vient du site.
+
+- « Doit appartenir au site » est une clé étrangère composite sur (`asset_id`, `site_id`).
+- La règle de niveau (§3.1) est un trigger, `check_metric_level()`, signalé comme `ck_metric_level`. Un second trigger refuse un changement du `level` d'une métrique que des lignes existantes contredisent. `measurement` (§4) applique la même règle.
 
 ## §3 Métriques
 
@@ -700,9 +714,9 @@ Une ligne par actif et par jour local : `energy_wh` pour un actif producteur, `c
 
 Les colonnes de `tariff`, `fixed_asset`, `fixed_asset_link`, `app_user` et `api_key` sont celles des tableaux anglais ci-dessus. En résumé :
 
-- **tariff :** un prix de soutirage et un prix d'injection par période de validité et par site, sans chevauchement de périodes. Les plages horaires sont un point ouvert (`SPEC.md` §15, O6).
+- **tariff :** un prix de soutirage et un prix d'injection par période de validité et par site, sans chevauchement de périodes (`ex_tariff_no_overlap`, qui exige l'extension `btree_gist`). Les deux dates sont incluses : une période finissant le 31 décembre est suivie d'une période commençant le 1er janvier ; un `valid_to` vide signifie sans fin. Les prix sont **par kWh**, dans `currency` ; l'énergie est stockée en Wh : diviser par 1000 avant de valoriser. Les plages horaires sont un point ouvert (`SPEC.md` §15, O6).
 - **fixed_asset :** la vue financière d'un actif, saisie directement par une organisation sans ERP, ou réduite à la référence externe quand un ERP fait foi.
-- **fixed_asset_link :** relie un actif opérationnel à une immobilisation ; plusieurs actifs peuvent appartenir à une même immobilisation. Le partage d'un actif entre plusieurs immobilisations est un point ouvert (`SPEC.md` §15, O7).
+- **fixed_asset_link :** relie un actif opérationnel à une immobilisation ; plusieurs actifs peuvent appartenir à une même immobilisation. Le partage d'un actif entre plusieurs immobilisations est un point ouvert (`SPEC.md` §15, O7). Point ouvert, à ajouter à `SPEC.md` §15 : une immobilisation peut-elle être reliée à un actif dont le site appartient à un autre portefeuille ? Rien ne l'impose en 1.0.
 - **app_user :** e-mail, mot de passe haché (Argon2), rôle `admin` ou `viewer`, et champs préparant le SSO (seul `local` est utilisé en 1.0).
 - **api_key :** une clé nommée par intégration, stockée hachée et affichée une seule fois, avec une portée `ingest`, `export` ou `admin`.
 
@@ -747,7 +761,7 @@ Les valeurs source vides ne sont pas copiées. Vérification : le nombre de lign
 
 ## §7 Données de démonstration
 
-Le script de seed ne crée et ne supprime plus de tables : les migrations créent le schéma, le seed ne fait qu'ajouter des lignes. `--reset` vide d'abord les tables de données. Il charge le catalogue de métriques, puis un portefeuille de démonstration derrière le compteur, à l'échelle commerciale et collective, jamais domestique :
+Le script de seed ne crée et ne supprime plus de tables : les migrations créent le schéma, le seed ne fait qu'ajouter des lignes. `--reset` vide d'abord les tables de données, mais jamais le catalogue (`language`, `metric`, `metric_translation`) ni `source_connection`. Il charge le catalogue de métriques, puis un portefeuille de démonstration derrière le compteur, à l'échelle commerciale et collective, jamais domestique :
 
 | Portefeuille | Site | PV | Batterie | Éolien | Fuseau |
 |---|---|---|---|---|---|

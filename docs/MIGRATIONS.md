@@ -4,7 +4,7 @@
 
 The schema is managed by [Alembic](https://alembic.sqlalchemy.org/). `models.py` and the revisions in `alembic/versions/` describe the same schema, and CI fails when they drift apart. Nothing else creates or changes tables: `create_all()`, `create_tables.py` and the hand-run SQL files are gone.
 
-Alembic reads `DATABASE_URL` (from the environment, or `.env`) through `database.py`, exactly like the API. The API container runs `alembic upgrade head` before it starts uvicorn.
+Alembic reads `DATABASE_URL` (from the environment, or `.env`) through `database.py`, exactly like the API. The API container runs `alembic upgrade head`, then loads the metric catalogue (`python seed_metrics.py`), before it starts uvicorn. If either fails, uvicorn does not start: see [API container won't start after a deploy](#api-container-wont-start-after-a-deploy).
 
 ## Everyday commands
 
@@ -103,6 +103,21 @@ Databases created before Alembic already have the baseline schema (revision `000
    sudo docker compose -f /var/www/docker-compose.yml exec grid-api alembic current
    ```
    The last command must show `(head)`.
+7. Check that the metric catalogue loaded. The container loads it itself on every start; the log must show `Metric catalogue loaded: …` (67 rows added on the first start, 0 afterwards):
+   ```bash
+   sudo docker compose -f /var/www/docker-compose.yml logs <service> | grep "Metric catalogue"
+   ```
+
+## API container won't start after a deploy
+
+The container runs `alembic upgrade head && python seed_metrics.py && exec uvicorn …`, so a failure in either step stops it before the API starts. Read its log:
+
+```bash
+sudo docker compose -f /var/www/docker-compose.yml logs --tail 50 <service>
+```
+
+- **A migration error** (an Alembic traceback): nothing was changed, since each run is one transaction. On a database created before Alembic, `type "assettype" already exists` means it was not stamped: see the one-off upgrade above. Anything else, fix the migration and redeploy.
+- **`❌ Metric catalogue not loaded: Metric <key>: …`**: `seeds/metrics.toml` would change something only a migration may change (a unit, kind or level), or is invalid. Nothing was written. Revert the file, or write a migration for the change.
 
 ---
 
@@ -112,7 +127,7 @@ Databases created before Alembic already have the baseline schema (revision `000
 
 Le schéma est géré par [Alembic](https://alembic.sqlalchemy.org/). `models.py` et les révisions de `alembic/versions/` décrivent le même schéma, et la CI échoue quand ils divergent. Plus rien d'autre ne crée ni ne modifie de tables : `create_all()`, `create_tables.py` et les fichiers SQL lancés à la main ont disparu.
 
-Alembic lit `DATABASE_URL` (dans l'environnement, ou `.env`) via `database.py`, exactement comme l'API. Le conteneur de l'API lance `alembic upgrade head` avant de démarrer uvicorn.
+Alembic lit `DATABASE_URL` (dans l'environnement, ou `.env`) via `database.py`, exactement comme l'API. Le conteneur de l'API lance `alembic upgrade head`, puis charge le catalogue de métriques (`python seed_metrics.py`), avant de démarrer uvicorn. Si l'un des deux échoue, uvicorn ne démarre pas : voir [Le conteneur de l'API ne démarre pas après un déploiement](#le-conteneur-de-lapi-ne-démarre-pas-après-un-déploiement).
 
 ## Commandes courantes
 
@@ -211,3 +226,18 @@ Les bases créées avant Alembic ont déjà le schéma de référence (révision
    sudo docker compose -f /var/www/docker-compose.yml exec grid-api alembic current
    ```
    La dernière commande doit afficher `(head)`.
+7. Vérifier que le catalogue de métriques est chargé. Le conteneur le charge lui-même à chaque démarrage ; le journal doit afficher `Metric catalogue loaded: …` (67 lignes ajoutées au premier démarrage, 0 ensuite) :
+   ```bash
+   sudo docker compose -f /var/www/docker-compose.yml logs <service> | grep "Metric catalogue"
+   ```
+
+## Le conteneur de l'API ne démarre pas après un déploiement
+
+Le conteneur lance `alembic upgrade head && python seed_metrics.py && exec uvicorn …` : un échec de l'une des deux étapes l'arrête avant le démarrage de l'API. Lire son journal :
+
+```bash
+sudo docker compose -f /var/www/docker-compose.yml logs --tail 50 <service>
+```
+
+- **Une erreur de migration** (trace Alembic) : rien n'a été modifié, chaque passage étant une seule transaction. Sur une base créée avant Alembic, `type "assettype" already exists` signifie qu'elle n'a pas été marquée : voir la montée de version ponctuelle ci-dessus. Sinon, corriger la migration et redéployer.
+- **`❌ Metric catalogue not loaded: Metric <clé> : …`** : `seeds/metrics.toml` changerait ce que seule une migration peut changer (une unité, un kind ou un level), ou est invalide. Rien n'a été écrit. Annuler la modification du fichier, ou écrire une migration pour ce changement.
