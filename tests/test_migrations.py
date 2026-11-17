@@ -2,14 +2,22 @@
 test_migrations.py
 
 The migrations are the schema. These tests fail when models.py and the
-Alembic revisions disagree, when two revisions claim the same parent, or
-when a revision cannot be undone and applied again.
+Alembic revisions disagree, when two revisions claim the same parent, when
+a revision cannot be undone and applied again, or when an existing MVP
+database does not survive stamp 0001 + upgrade head.
 """
 
+from pathlib import Path
+
+import pytest
 from alembic import command
 from alembic.script import ScriptDirectory
+from sqlalchemy import create_engine, text
 
 import database
+
+MVP_SCHEMA = Path(__file__).parent / "fixtures" / "mvp_schema.sql"
+MVP_DB = "rada_mvp_test"  # ends in _test, like every database the tests reset
 
 
 def test_models_match_migrations(alembic_config):
@@ -29,3 +37,87 @@ def test_downgrade_then_upgrade(alembic_config):
     command.downgrade(alembic_config, "base")
     command.upgrade(alembic_config, "head")
     command.check(alembic_config)
+
+
+# --- An existing MVP database: stamp 0001, then upgrade head ---
+
+@pytest.fixture()
+def mvp_engine():
+    """A throwaway database holding the MVP schema of tests/fixtures/mvp_schema.sql."""
+    admin = create_engine(database.engine.url.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    with admin.connect() as conn:
+        conn.execute(text(f"DROP DATABASE IF EXISTS {MVP_DB} WITH (FORCE)"))
+        conn.execute(text(f"CREATE DATABASE {MVP_DB}"))
+    engine = create_engine(database.engine.url.set(database=MVP_DB))
+    raw = engine.raw_connection()
+    try:
+        cursor = raw.cursor()
+        cursor.execute("DROP SCHEMA public CASCADE")  # the dump recreates it
+        cursor.execute(MVP_SCHEMA.read_text())
+        raw.commit()
+    finally:
+        raw.close()
+    # The dump empties search_path on its connection: never hand that one to the migrations
+    engine.dispose()
+    yield engine
+    engine.dispose()
+    with admin.connect() as conn:
+        conn.execute(text(f"DROP DATABASE {MVP_DB} WITH (FORCE)"))
+    admin.dispose()
+
+
+def upgrade_stamped_mvp(conn, alembic_config):
+    # A session time zone other than UTC proves the timestamp conversion does not depend on it
+    conn.execute(text("SET TIME ZONE 'Europe/Paris'"))
+    alembic_config.attributes["connection"] = conn
+    command.stamp(alembic_config, "0001")
+    command.upgrade(alembic_config, "head")
+    command.check(alembic_config)
+
+
+def test_mvp_database_keeps_its_assets(mvp_engine, alembic_config):
+    with mvp_engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO public.assets (id, asset_type, eic_code, name, max_charge_rate_mw,
+                max_discharge_rate_mw, max_capacity_mwh, latitude, longitude, edge_id, created_at)
+            VALUES
+                (1, 'BATTERY', 'E1', 'Edge battery, no position', 1, 1, 2, NULL,    NULL,   'edge0', '2026-10-17 08:00:00'),
+                (2, 'BATTERY', 'E2', 'Edge battery',              1, 1, 2, 48.7115, 2.1710, 'edge0', '2026-10-17 08:00:01'),
+                (3, 'SOLAR',   'S1', 'Solar with GPS',            0, 5, 0, 43.8367, 5.7476, NULL,    '2026-10-17 08:00:02'),
+                (4, 'WIND',    'W1', 'Wind without GPS',          0, 9, 0, NULL,    NULL,   NULL,    '2026-10-17 08:00:03')
+        """))
+        conn.execute(text("SELECT setval('public.assets_id_seq', 4)"))
+        upgrade_stamped_mvp(conn, alembic_config)
+
+        assets = conn.execute(text("""
+            SELECT a.id, a.site_id, s.name, s.edge_id, s.latitude, s.longitude,
+                   a.created_at AT TIME ZONE 'UTC' AS created_utc
+            FROM public.assets a JOIN public.site s ON s.id = a.site_id
+            ORDER BY a.id
+        """)).mappings().all()
+        portfolios = conn.execute(text("SELECT name, currency FROM public.portfolio")).all()
+        site_count = conn.execute(text("SELECT count(*) FROM public.site")).scalar()
+
+    assert [a["id"] for a in assets] == [1, 2, 3, 4]  # no asset lost, every one has a site
+    assert portfolios == [("Demo", "EUR")]
+    assert site_count == 3  # one for edge0, one each for assets 3 and 4
+
+    edge_site = {a["site_id"] for a in assets[:2]}
+    assert len(edge_site) == 1
+    # Named after the edge; position from the lowest-id asset that has one
+    assert (assets[0]["name"], assets[0]["edge_id"]) == ("edge0", "edge0")
+    assert (float(assets[0]["latitude"]), float(assets[0]["longitude"])) == (48.7115, 2.171)
+
+    assert (assets[2]["name"], float(assets[2]["latitude"]), float(assets[2]["longitude"])) == (
+        "Solar with GPS", 43.8367, 5.7476)
+    assert (assets[3]["name"], assets[3]["latitude"]) == ("Wind without GPS", None)
+
+    # The MVP wrote UTC wall-clock times: the same instants after the conversion
+    assert [a["created_utc"].isoformat() for a in assets] == [
+        "2026-10-17T08:00:00", "2026-10-17T08:00:01", "2026-10-17T08:00:02", "2026-10-17T08:00:03"]
+
+
+def test_mvp_database_without_assets_gets_no_demo_portfolio(mvp_engine, alembic_config):
+    with mvp_engine.begin() as conn:
+        upgrade_stamped_mvp(conn, alembic_config)
+        assert conn.execute(text("SELECT count(*) FROM public.portfolio")).scalar() == 0

@@ -82,7 +82,7 @@ A physical location with one grid connection, mapped to at most one OpenEMS edge
 | portfolio_id | FK portfolio | Required |
 | name | text | |
 | source_connection_id | FK source_connection, nullable | Empty for a site with no live source (demo, CSV import) |
-| edge_id | text, nullable | The OpenEMS edge identifier, for example `edge0`. Unique on (`source_connection_id`, `edge_id`) |
+| edge_id | text, nullable | The OpenEMS edge identifier, for example `edge0`. Unique on (`source_connection_id`, `edge_id`), and unique on its own among sites with no connection (a partial unique index: two empty connections would not count as equal) |
 | timezone | text | IANA name, for example `Europe/Paris`. Required: days and months follow it |
 | currency | char(3), nullable | Overrides the portfolio's currency |
 | latitude, longitude | numeric, nullable | Moves here from `asset` |
@@ -105,8 +105,11 @@ Existing table, extended. One piece of equipment at a site.
 | rated_power_w | integer, nullable | Installed power; for PV this is the peak power used for specific yield |
 | capacity_wh | integer, nullable | Usable battery capacity, used for equivalent full cycles |
 
+- The table keeps its MVP name, `assets` (plural); the tables added in V1.0 are singular.
+- `asset_type` is the MVP exception to enum storage: it stores the member names (`'BATTERY'`, `'METER'`). Every V1.0 enum stores its lowercase value (`'pending'`).
 - `eic_code` stays a plain attribute, never a lookup key: behind-the-meter assets rarely have one.
 - The MVP columns (`max_capacity_mwh`, `max_charge_rate_mw`, `max_discharge_rate_mw`, `reactive_power_capacity_mvar`, `efficiency`, `latitude`, `longitude`, `edge_id`) stay until the front end has switched to the new endpoints, then are migrated or dropped in a later migration.
+- **TODO:** `rated_power_w` and `capacity_wh` are empty after revision 0002. The migration that drops the MVP columns copies them first: `max_discharge_rate_mw` ×10⁶ into `rated_power_w` and `max_capacity_mwh` ×10⁶ into `capacity_wh`.
 
 ### discovered_component
 
@@ -371,10 +374,18 @@ The finance view of an asset. Filled in directly by an organisation with no ERP;
 
 ### §6.1 Copying the MVP data
 
-**Sites.** The migration creates a `Demo` portfolio (EUR) and a site for every existing asset, in `Europe/Paris`:
+**Sites.** Revision 0002 creates a `Demo` portfolio (EUR) and a site for every existing asset, in `Europe/Paris`. A database with no assets gets neither.
 
-- Assets with an `edge_id` share one site per edge, linked to the `source_connection` of the OpenEMS Backend (on preprod: assets 49 and 50 on `edge0`).
+- Assets with an `edge_id` share one site per edge, named after the edge, positioned at the lowest-id asset that has a position (on preprod: assets 49 and 50 on `edge0`). The site has no `source_connection` yet: a migration holds no environment configuration (decision of 17 November 2026), so BE-05 or the seed makes the link.
 - Every other asset gets its own site, named after the asset, carrying its latitude and longitude, so the map and fleet dashboard keep their positions.
+
+These one-site-per-asset sites are a transitional mapping of the MVP fleet, replaced by the demo portfolio of §7.
+
+**Transitional rule for new MVP assets.** Until the MVP endpoints retire, `POST /assets` and `seed_batteries.py` give each new asset a site with the same rule (`mvp_sites.py`). Known limits:
+
+- A later `PUT` or `PATCH` of an asset's `latitude`, `longitude` or `edge_id` changes the asset's MVP columns only, not its site. The MVP front end reads the asset's columns, so nothing visible breaks.
+- An MVP asset only joins an edge's site while that site has no connection. Once BE-05 links `edge0` to a Backend, a new MVP asset on `edge0` gets a new site with no connection, because edge IDs are only unique within one Backend and the MVP request does not say which.
+- The first two concurrent requests on an empty install can both try to create the `Demo` portfolio; the unique name refuses the second, which fails with a server error.
 
 **Measurements.** Each `state_of_charge` row becomes up to six asset-level rows, with `source = mvp-migration`:
 
@@ -472,7 +483,7 @@ Un lieu physique avec un point de raccordement au réseau, associé à au plus u
 | portfolio_id | FK portfolio | Obligatoire |
 | name | text | |
 | source_connection_id | FK source_connection, nullable | Vide pour un site sans source en direct (démo, import CSV) |
-| edge_id | text, nullable | L'identifiant de l'edge OpenEMS, par exemple `edge0`. Unique sur (`source_connection_id`, `edge_id`) |
+| edge_id | text, nullable | L'identifiant de l'edge OpenEMS, par exemple `edge0`. Unique sur (`source_connection_id`, `edge_id`), et unique à lui seul parmi les sites sans connexion (un index unique partiel : deux connexions vides ne compteraient pas comme égales) |
 | timezone | text | Nom IANA, par exemple `Europe/Paris`. Obligatoire : les jours et les mois le suivent |
 | currency | char(3), nullable | Remplace la devise du portefeuille |
 | latitude, longitude | numeric, nullable | Déplacées depuis `asset` |
@@ -495,8 +506,11 @@ Table existante, étendue. Un équipement d'un site.
 | rated_power_w | integer, nullable | Puissance installée ; pour le PV, la puissance crête utilisée pour le productible spécifique |
 | capacity_wh | integer, nullable | Capacité utile de la batterie, utilisée pour les cycles équivalents |
 
+- La table garde son nom MVP, `assets` (au pluriel) ; les tables ajoutées en V1.0 sont au singulier.
+- `asset_type` est l'exception MVP au stockage des enums : il stocke les noms des membres (`'BATTERY'`, `'METER'`). Chaque enum V1.0 stocke sa valeur en minuscules (`'pending'`).
 - `eic_code` reste un simple attribut, jamais une clé de recherche : les actifs derrière le compteur en ont rarement un.
 - Les colonnes MVP (`max_capacity_mwh`, `max_charge_rate_mw`, `max_discharge_rate_mw`, `reactive_power_capacity_mvar`, `efficiency`, `latitude`, `longitude`, `edge_id`) restent jusqu'à la bascule du front sur les nouveaux endpoints, puis sont migrées ou supprimées par une migration ultérieure.
+- **À FAIRE :** `rated_power_w` et `capacity_wh` sont vides après la révision 0002. La migration qui supprime les colonnes MVP les remplit d'abord : `max_discharge_rate_mw` ×10⁶ dans `rated_power_w` et `max_capacity_mwh` ×10⁶ dans `capacity_wh`.
 
 ### discovered_component
 
@@ -703,10 +717,18 @@ Les colonnes de `tariff`, `fixed_asset`, `fixed_asset_link`, `app_user` et `api_
 
 ### §6.1 Copie des données MVP
 
-**Sites.** La migration crée un portefeuille `Demo` (EUR) et un site pour chaque actif existant, en `Europe/Paris` :
+**Sites.** La révision 0002 crée un portefeuille `Demo` (EUR) et un site pour chaque actif existant, en `Europe/Paris`. Une base sans actifs ne reçoit ni l'un ni l'autre.
 
-- Les actifs ayant un `edge_id` partagent un site par edge, relié à la `source_connection` du Backend OpenEMS (en préprod : actifs 49 et 50 sur `edge0`).
+- Les actifs ayant un `edge_id` partagent un site par edge, nommé d'après l'edge, positionné sur l'actif de plus petit id qui a une position (en préprod : actifs 49 et 50 sur `edge0`). Le site n'a pas encore de `source_connection` : une migration ne contient aucune configuration d'environnement (décision du 17 novembre 2026), donc le lien est fait par BE-05 ou le seed.
 - Chaque autre actif reçoit son propre site, nommé d'après l'actif et reprenant sa latitude et sa longitude, pour que la carte et le tableau de bord du parc gardent leurs positions.
+
+Ces sites « un par actif » sont une correspondance transitoire du parc MVP, remplacée par le portefeuille de démo du §7.
+
+**Règle transitoire pour les nouveaux actifs MVP.** Jusqu'au retrait des endpoints MVP, `POST /assets` et `seed_batteries.py` donnent à chaque nouvel actif un site selon la même règle (`mvp_sites.py`). Limites connues :
+
+- Un `PUT` ou `PATCH` ultérieur de `latitude`, `longitude` ou `edge_id` d'un actif ne modifie que ses colonnes MVP, pas son site. Le front MVP lit les colonnes de l'actif : rien de visible ne casse.
+- Un actif MVP ne rejoint le site d'un edge que tant que ce site n'a pas de connexion. Une fois `edge0` relié à un Backend par BE-05, un nouvel actif MVP sur `edge0` reçoit un nouveau site sans connexion, car les identifiants d'edge ne sont uniques qu'au sein d'un Backend et la requête MVP ne dit pas lequel.
+- Les deux premières requêtes simultanées sur une installation vide peuvent toutes deux tenter de créer le portefeuille `Demo` ; le nom unique refuse la seconde, qui échoue avec une erreur serveur.
 
 **Mesures.** Chaque ligne de `state_of_charge` devient jusqu'à six lignes au niveau actif, avec `source = mvp-migration` :
 

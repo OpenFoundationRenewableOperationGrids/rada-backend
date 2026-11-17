@@ -25,6 +25,7 @@ from math import ceil
 from database import SessionLocal
 from models import Asset, AssetType, StateOfCharge, GridConnectionStatus, AssetStatus
 from llm_service import ask_grid_question_stream
+from mvp_sites import site_for_new_asset
 from telemetry_simulator import run as run_simulator
 
 RADA_BANNER = """
@@ -146,6 +147,15 @@ class AssetUpdate(BaseModel):
     longitude: Optional[float] = Field(None, ge=-180, le=180)
     edge_id: Optional[str] = None
 
+# The unique key on assets.eic_code, as PostgreSQL named it in the baseline migration
+EIC_CODE_CONSTRAINT = "assets_eic_code_key"
+
+
+def is_eic_code_conflict(error: IntegrityError) -> bool:
+    """True when the violated constraint is the eic_code unique key, and nothing else."""
+    diag = getattr(error.orig, "diag", None)
+    return getattr(diag, "constraint_name", None) == EIC_CODE_CONSTRAINT
+
 # NOT NULL columns of Asset (except the primary key) — a PATCH may not set them to null
 NON_NULLABLE_ASSET_FIELDS = {
     c.name for c in Asset.__table__.columns if not c.nullable and not c.primary_key
@@ -228,12 +238,19 @@ def create_asset(payload: AssetCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail=f"Asset with eic_code {payload.eic_code} already exists")
 
     asset = Asset(**payload.model_dump())
+    # Transitional: the MVP request has no site, so one is derived (mvp_sites.py)
+    asset.site = site_for_new_asset(
+        db, name=payload.name, edge_id=payload.edge_id,
+        latitude=payload.latitude, longitude=payload.longitude,
+    )
     db.add(asset)
     # The pre-check above can race with a concurrent insert — the unique constraint has the last word
     try:
         db.commit()
-    except IntegrityError:
+    except IntegrityError as error:
         db.rollback()
+        if not is_eic_code_conflict(error):
+            raise
         raise HTTPException(status_code=409, detail=f"Asset with eic_code {payload.eic_code} already exists")
     db.refresh(asset)
     return {"action": "created", "asset_id": asset.id}
@@ -264,8 +281,10 @@ def replace_asset(asset_id: int, payload: AssetUpdate, db: Session = Depends(get
         setattr(asset, field, value)
     try:
         db.commit()
-    except IntegrityError:
+    except IntegrityError as error:
         db.rollback()
+        if not is_eic_code_conflict(error):
+            raise
         raise HTTPException(status_code=409, detail=f"Asset with eic_code {payload.eic_code} already exists")
     db.refresh(asset)
     return {"action": "updated", "asset_id": asset.id}
@@ -303,8 +322,10 @@ def update_asset(asset_id: int, payload: AssetPatch, db: Session = Depends(get_d
         setattr(asset, field, value)
     try:
         db.commit()
-    except IntegrityError:
+    except IntegrityError as error:
         db.rollback()
+        if not is_eic_code_conflict(error):
+            raise
         raise HTTPException(status_code=409, detail=f"Asset with eic_code {updates.get('eic_code')} already exists")
     db.refresh(asset)
     return {"action": "updated", "asset_id": asset.id}

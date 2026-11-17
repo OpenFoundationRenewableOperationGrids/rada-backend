@@ -156,7 +156,8 @@ rada-backend/
 ├── llm_service.py          # vLLM (OpenAI-compatible) prompt building and streaming
 ├── telemetry_simulator.py  # Telemetry simulator, started from main.py (TELEMETRY_SIMULATOR)
 ├── seed_batteries.py       # Seeds 30 days of history for batteries, solar and wind farms
-│                           #   (run after `alembic upgrade head`; --reset empties the MVP tables)
+│                           #   (run after `alembic upgrade head`; --reset empties the demo data)
+├── mvp_sites.py            # Transitional: gives each new MVP asset a site (DATA_MODEL.md §6.1)
 ├── grid_signal_fetcher.py  # RTE grid signals — not wired into main.py yet
 ├── alembic/, alembic.ini   # Database migrations (see docs/MIGRATIONS.md)
 ├── bridge/                 # OpenEMS bridge: reads OpenEMS Backends over B2B and posts
@@ -557,7 +558,7 @@ Seed scripts run **inside** the running container:
 docker exec grid_api python seed_batteries.py
 ```
 
-The script refuses to run when assets already exist. `--reset` empties the MVP tables first, which deletes **all** their data, including the assets fed by the OpenEMS bridge.
+The script refuses to run when assets already exist. `--reset` first empties `dispatch_commands`, `state_of_charge`, `grid_signals`, `discovered_component`, `assets`, `site` and `portfolio`, which deletes **all** their data, including the assets fed by the OpenEMS bridge and their sites. `source_connection` is configuration and is kept.
 
 ### Traefik & SSL
 

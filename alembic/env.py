@@ -33,10 +33,20 @@ def run_migrations_offline():
 
 
 def run_migrations_online():
+    # A test can hand over its own connection, for example to migrate a second
+    # database (tests/test_migrations.py); otherwise use the app's engine
+    connection = config.attributes.get("connection")
+    if connection is not None:
+        _run_migrations(connection)
+        return
     with database.engine.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
-        with context.begin_transaction():
-            context.run_migrations()
+        _run_migrations(connection)
+
+
+def _run_migrations(connection):
+    context.configure(connection=connection, target_metadata=target_metadata)
+    with context.begin_transaction():
+        context.run_migrations()
 
 
 if context.is_offline_mode():

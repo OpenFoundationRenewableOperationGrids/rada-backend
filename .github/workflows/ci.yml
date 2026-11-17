@@ -58,6 +58,15 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - name: Migrations on an empty database
         run: alembic upgrade head && alembic check
+      - name: Migrations on a copy of the MVP schema
+        env:
+          MVP_COPY_URL: postgresql://rada:rada@localhost:5432/rada_mvp_copy
+        run: |
+          psql "postgresql://rada:rada@localhost:5432/postgres" -c "CREATE DATABASE rada_mvp_copy"
+          psql "$MVP_COPY_URL" -v ON_ERROR_STOP=1 -q -c "DROP SCHEMA public CASCADE" -f tests/fixtures/mvp_schema.sql
+          DATABASE_URL="$MVP_COPY_URL" alembic stamp 0001
+          DATABASE_URL="$MVP_COPY_URL" alembic upgrade head
+          DATABASE_URL="$MVP_COPY_URL" alembic check
       - run: python -m pytest -v   # as in TESTING.md: puts repo root on sys.path
 
   docker-build:

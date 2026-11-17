@@ -24,7 +24,11 @@ tests/
   test_assets_crud.py    # tests des routes POST/PUT/PATCH /assets
   test_assets_gps_api.py # tests d'intégration GPS/edge_id sur les endpoints assets
   test_asset_schema.py   # tests unitaires purs du schéma Pydantic AssetCreate (pas de DB/HTTP)
-  test_migrations.py     # modèles et migrations Alembic alignés, une seule tête, downgrade/upgrade
+  test_migrations.py     # modèles et migrations Alembic alignés, une seule tête, downgrade/upgrade,
+                         #   et montée d'une copie du schéma MVP (stamp 0001 puis upgrade head)
+  test_site_hierarchy.py # contraintes de la hiérarchie des sites et règle transitoire mvp_sites.py
+  fixtures/
+    mvp_schema.sql       # schéma MVP d'avant Alembic (pg_dump, voir son en-tête pour le régénérer)
 ```
 
 Tout nouveau fichier de test doit être placé dans `tests/` et nommé `test_*.py` pour être
@@ -113,13 +117,15 @@ Points clés :
 | `DROP SCHEMA public CASCADE` puis `alembic upgrade head` | Repart d'un schéma vide à chaque lancement de la suite (pas juste par test) et le construit avec les migrations, exactement comme une nouvelle installation |
 | `alembic_config` | La configuration Alembic, pour les tests de `test_migrations.py` |
 | `db_session` | Accès direct à la base de test, pour arranger ou vérifier l'état en base indépendamment des réponses HTTP |
-| `clean_tables` (`autouse=True`) | Vide les tables `assets`/`state_of_charge`/`dispatch_commands` avant **chaque** test pour qu'ils ne se polluent pas entre eux |
+| `clean_tables` (`autouse=True`) | Vide les tables des actifs et des sites (`dispatch_commands`, `state_of_charge`, `discovered_component`, `assets`, `site`, `source_connection`, `portfolio`) avant **chaque** test pour qu'ils ne se polluent pas entre eux |
 | `client` | `TestClient` FastAPI prêt à l'emploi, injecté par son nom dans un test |
 | `auth_headers` | Dict `{"X-API-Key": "test-api-key"}` à passer dans `headers=` de chaque requête vers une route protégée |
 
 `test_migrations.py` vérifie que `models.py` et les révisions de `alembic/versions/` décrivent le
 même schéma (l'équivalent d'`alembic check`), qu'il n'y a qu'une seule tête de migration, et que
-toutes les révisions peuvent être annulées puis réappliquées. Voir
+toutes les révisions peuvent être annulées puis réappliquées. Il charge aussi
+`tests/fixtures/mvp_schema.sql` dans une base jetable `rada_mvp_test`, la marque à `0001`
+puis la monte à `head`, pour prouver qu'une base MVP existante garde ses actifs. Voir
 [docs/MIGRATIONS.md](docs/MIGRATIONS.md) pour créer une migration.
 
 > ⚠️ **Ne pas oublier `headers=auth_headers`** : comme `AUTH_ENABLED=true` dans les tests, tout

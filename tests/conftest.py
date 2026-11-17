@@ -62,12 +62,15 @@ def db_session():
 
 @pytest.fixture(autouse=True)
 def clean_tables():
-    """Wipe asset-related tables before every test so they don't leak into each other."""
+    """Wipe asset- and site-related tables before every test so they don't leak into each other."""
     session = database.SessionLocal()
     try:
-        session.execute(models.DispatchCommand.__table__.delete())
-        session.execute(models.StateOfCharge.__table__.delete())
-        session.execute(models.Asset.__table__.delete())
+        # Children before parents, so no foreign key is left pointing at a deleted row
+        for model in (
+            models.DispatchCommand, models.StateOfCharge, models.DiscoveredComponent,
+            models.Asset, models.Site, models.SourceConnection, models.Portfolio,
+        ):
+            session.execute(model.__table__.delete())
         session.commit()
     finally:
         session.close()

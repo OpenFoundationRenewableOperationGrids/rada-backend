@@ -56,7 +56,13 @@ Databases created before Alembic already have the baseline schema (revision `000
 > **Stamp before the new image starts.** If the new API container starts on a database that is not stamped, `alembic upgrade head` tries to create the baseline schema again and fails (the first error is `type "assettype" already exists`), and the API does not start. Nothing is changed (the migration runs in one transaction), but the API stays down until the database is stamped.
 
 1. Back up the database.
-2. Check that the columns of the old `migrations/001_assets_gps_edge.sql` are there. Stamping records that the database has the baseline schema, so it must really have it:
+2. Check the time zone of the existing timestamps. Revision 0002 converts `assets.created_at` and `updated_at` to `timestamptz`, reading them as UTC. The app has written them in UTC since 31 May 2026; only rows written before that, or outside the app, on a server whose time zone is not UTC, could be local time:
+   ```sql
+   SHOW timezone;
+   SELECT min(created_at), max(updated_at) FROM assets;
+   ```
+   If the server is not UTC and `min(created_at)` is before `2026-05-31 16:00`, stop and check those rows before going on. (Preprod and production were reseeded on 17 October 2026.)
+3. Check that the columns of the old `migrations/001_assets_gps_edge.sql` are there. Stamping records that the database has the baseline schema, so it must really have it:
    ```sql
    SELECT column_name FROM information_schema.columns
    WHERE table_name = 'assets' AND column_name IN ('latitude', 'longitude', 'edge_id');
@@ -68,17 +74,19 @@ Databases created before Alembic already have the baseline schema (revision `000
      ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION,
      ADD COLUMN IF NOT EXISTS edge_id   VARCHAR;
    ```
-3. Build the new image as in the usual deploy sequence (README §9), but do not start it yet.
-4. Confirm the API's service name first, since the stamp runs in a one-off container of that service:
+4. Build the new image as in the usual deploy sequence (README §9), but do not start it yet.
+5. Confirm the API's service name first, since the stamp runs in a one-off container of that service:
    ```bash
    sudo docker compose -f /var/www/docker-compose.yml config --services
    ```
-5. Stamp from a one-off container of the new image, then start the API. On start-up it runs `alembic upgrade head`, which applies every revision after the baseline.
+6. Stamp from a one-off container of the new image, then start the API. On start-up it runs `alembic upgrade head`, which applies every revision after the baseline.
 
    | Environment | Service |
    |---|---|
    | Preprod | `rada-app-preprod` |
    | Production | `grid-api` |
+
+   **TODO:** preprod's compose file is assumed to be `/var/www/docker-compose.yml`, like production's. Confirm it (and the service name) with `docker compose config --services` on the VPS, then remove this note.
 
    Preprod:
    ```bash
@@ -156,7 +164,13 @@ Les bases créées avant Alembic ont déjà le schéma de référence (révision
 > **Marquer la base avant le démarrage de la nouvelle image.** Si le nouveau conteneur de l'API démarre sur une base non marquée, `alembic upgrade head` tente de recréer le schéma de référence et échoue (la première erreur est `type "assettype" already exists`), et l'API ne démarre pas. Rien n'est modifié (la migration tourne dans une seule transaction), mais l'API reste arrêtée tant que la base n'est pas marquée.
 
 1. Sauvegarder la base.
-2. Vérifier que les colonnes de l'ancien `migrations/001_assets_gps_edge.sql` sont présentes. Le marquage enregistre que la base a le schéma de référence : elle doit donc vraiment l'avoir :
+2. Vérifier le fuseau horaire des horodatages existants. La révision 0002 convertit `assets.created_at` et `updated_at` en `timestamptz` en les lisant comme de l'UTC. L'application les écrit en UTC depuis le 31 mai 2026 ; seules des lignes écrites avant, ou hors de l'application, sur un serveur dont le fuseau n'est pas UTC, pourraient être en heure locale :
+   ```sql
+   SHOW timezone;
+   SELECT min(created_at), max(updated_at) FROM assets;
+   ```
+   Si le serveur n'est pas en UTC et que `min(created_at)` est antérieur au `2026-05-31 16:00`, s'arrêter et vérifier ces lignes avant de continuer. (La préprod et la production ont été rechargées le 17 octobre 2026.)
+3. Vérifier que les colonnes de l'ancien `migrations/001_assets_gps_edge.sql` sont présentes. Le marquage enregistre que la base a le schéma de référence : elle doit donc vraiment l'avoir :
    ```sql
    SELECT column_name FROM information_schema.columns
    WHERE table_name = 'assets' AND column_name IN ('latitude', 'longitude', 'edge_id');
@@ -168,17 +182,19 @@ Les bases créées avant Alembic ont déjà le schéma de référence (révision
      ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION,
      ADD COLUMN IF NOT EXISTS edge_id   VARCHAR;
    ```
-3. Construire la nouvelle image comme dans la séquence de déploiement habituelle (README §9), sans la démarrer.
-4. Confirmer d'abord le nom du service de l'API, car le marquage tourne dans un conteneur ponctuel de ce service :
+4. Construire la nouvelle image comme dans la séquence de déploiement habituelle (README §9), sans la démarrer.
+5. Confirmer d'abord le nom du service de l'API, car le marquage tourne dans un conteneur ponctuel de ce service :
    ```bash
    sudo docker compose -f /var/www/docker-compose.yml config --services
    ```
-5. Marquer la base depuis un conteneur ponctuel de la nouvelle image, puis démarrer l'API. Au démarrage, elle lance `alembic upgrade head`, qui applique toutes les révisions postérieures à la référence.
+6. Marquer la base depuis un conteneur ponctuel de la nouvelle image, puis démarrer l'API. Au démarrage, elle lance `alembic upgrade head`, qui applique toutes les révisions postérieures à la référence.
 
    | Environnement | Service |
    |---|---|
    | Préprod | `rada-app-preprod` |
    | Production | `grid-api` |
+
+   **À FAIRE :** le fichier compose de la préprod est supposé être `/var/www/docker-compose.yml`, comme celui de la production. Le confirmer (ainsi que le nom du service) avec `docker compose config --services` sur le VPS, puis retirer cette note.
 
    Préprod :
    ```bash

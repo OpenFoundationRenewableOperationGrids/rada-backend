@@ -2,7 +2,8 @@
 seed_batteries.py
 Populates the MVP tables with a demo fleet and 30 days of realistic
 grid-scale historical data. It never creates or drops tables: the schema
-comes from the migrations, so run `alembic upgrade head` first.
+comes from the migrations, so run `alembic upgrade head` first. Each asset
+gets a site in the Demo portfolio through mvp_sites.py (transitional).
 
 Assets modelled:
   - 30 x Battery BESS units (real-world manufacturers)
@@ -18,7 +19,7 @@ Units: MW and MWh throughout (grid-scale standard).
 
 Usage:
     python seed_batteries.py           # refuses if assets already exist
-    python seed_batteries.py --reset   # empties the MVP tables first
+    python seed_batteries.py --reset   # empties the demo data first (see RESET_TABLES)
 """
 
 import argparse
@@ -31,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sqlalchemy import text
 
 from database import SessionLocal
+from mvp_sites import site_for_new_asset
 from models import (
     Asset, AssetType, GridConnectionStatus, AssetStatus,
     StateOfCharge, DispatchCommand, GridSignal,
@@ -301,7 +303,11 @@ def make_grid_signals() -> list:
 
 # ── Seed ──────────────────────────────────────────────────────────────────────
 
-MVP_TABLES = "dispatch_commands, state_of_charge, grid_signals, assets"
+# Demo data emptied by --reset. source_connection is configuration and stays.
+RESET_TABLES = (
+    "dispatch_commands", "state_of_charge", "grid_signals",
+    "discovered_component", "assets", "site", "portfolio",
+)
 
 
 def seed(reset: bool = False):
@@ -309,13 +315,18 @@ def seed(reset: bool = False):
     try:
         if reset:
             # Empty the data only; the tables themselves come from the migrations
-            db.execute(text(f"TRUNCATE {MVP_TABLES} RESTART IDENTITY"))
-            print("MVP tables emptied.\n")
+            db.execute(text(f"TRUNCATE {', '.join(RESET_TABLES)} RESTART IDENTITY"))
+            print(f"Emptied: {', '.join(RESET_TABLES)}\n")
         elif db.query(Asset).first() is not None:
-            print("❌ The database already has assets. Run with --reset to empty the MVP tables first.")
+            print("❌ The database already has assets. Run with --reset to empty the demo data first.")
             sys.exit(1)
 
-        db.add_all(all_assets)
+        for asset in all_assets:
+            asset.site = site_for_new_asset(
+                db, name=asset.name, edge_id=asset.edge_id,
+                latitude=asset.latitude, longitude=asset.longitude,
+            )
+            db.add(asset)  # in the session before the next site is flushed
         db.flush()
         print(f"✅ {len(batteries)} battery assets")
         print(f"✅ {len(solar_assets)} solar assets")
@@ -357,5 +368,8 @@ def seed(reset: bool = False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Load the MVP demo fleet (run `alembic upgrade head` first).")
-    parser.add_argument("--reset", action="store_true", help="empty the MVP tables before seeding")
+    parser.add_argument(
+        "--reset", action="store_true",
+        help="empty the demo data first: " + ", ".join(RESET_TABLES) + " (source_connection is kept)",
+    )
     seed(reset=parser.parse_args().reset)
