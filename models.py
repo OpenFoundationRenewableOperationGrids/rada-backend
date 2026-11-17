@@ -3,8 +3,9 @@ models.py
 
 SQLAlchemy ORM models — the database schema, kept in step with the Alembic
 migrations (docs/MIGRATIONS.md). Defines the V1.0 site hierarchy (Portfolio,
-SourceConnection, Site, DiscoveredComponent; docs/DATA_MODEL.md §2) and the
-MVP tables: Asset (batteries, solar and wind farms, now attached to a site),
+SourceConnection, Site, DiscoveredComponent; docs/DATA_MODEL.md §2), the
+metric catalogue (Language, Metric, MetricTranslation, MetricMapping; §2-§3),
+the finance tables (Tariff, FixedAsset, FixedAssetLink; §5) and the MVP tables: Asset (batteries, solar and wind farms, now attached to a site),
 their StateOfCharge/telemetry history, grid-wide GridSignal readings, and
 DispatchCommand records sent to assets.
 """
@@ -14,7 +15,7 @@ from sqlalchemy import (
     ForeignKeyConstraint, Index, Integer, Numeric, String, Text,
     UniqueConstraint, func, text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, ExcludeConstraint
 from sqlalchemy.orm import mapped_column, relationship
 from datetime import datetime, timezone
 
@@ -53,6 +54,24 @@ class DiscoveryStatus(PyEnum):
     IGNORED = "ignored"
 
 
+class MetricKind(PyEnum):
+    INSTANTANEOUS = "instantaneous"
+    CUMULATIVE = "cumulative"
+    STATE = "state"
+
+
+class MetricLevel(PyEnum):
+    SITE = "site"    # posted and mapped with no asset
+    ASSET = "asset"  # requires an asset
+    BOTH = "both"
+
+
+class MetricCategory(PyEnum):
+    CORE = "core"          # has KPIs
+    OPTIONAL = "optional"  # charted and exported, no KPI
+    CUSTOM = "custom"      # created by an administrator
+
+
 def _values(enum_cls):
     """Store an enum's lowercase values, not its member names (V1.0 enums)."""
     return [member.value for member in enum_cls]
@@ -62,11 +81,15 @@ def _currency_check(table, column):
     return CheckConstraint(f"{column} ~ '^[A-Z]{{3}}$'", name=f"ck_{table}_{column}_iso4217")
 
 
-class ReferenceMixin:
-    """id, created_at and updated_at: every V1.0 reference table has them (DATA_MODEL.md §1)."""
-    id = mapped_column(Integer, primary_key=True, sort_order=-1)  # first column of the table
+class TimestampMixin:
+    """created_at and updated_at, for every V1.0 table (DATA_MODEL.md §1)."""
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class ReferenceMixin(TimestampMixin):
+    """Plus the integer id: the key of every V1.0 table with no natural key of its own."""
+    id = mapped_column(Integer, primary_key=True, sort_order=-1)  # first column of the table
 
 
 class Portfolio(ReferenceMixin, Base):
@@ -151,6 +174,139 @@ class DiscoveredComponent(ReferenceMixin, Base):
             ["asset_id", "site_id"], ["assets.id", "assets.site_id"],
             name="fk_discovered_component_asset_site",
         ),
+    )
+
+
+class Language(TimestampMixin, Base):
+    """A language the install supports. Its BCP 47 code is the key (DATA_MODEL.md §2)."""
+    __tablename__ = "language"
+
+    code = Column(Text, primary_key=True)  # "en", "fr", "de"
+    name = Column(Text, nullable=False)  # the language's own name: English, Français, Deutsch
+    is_default = Column(Boolean, nullable=False, server_default=text("false"))  # fallback for missing names
+    is_active = Column(Boolean, nullable=False, server_default=text("true"))
+
+    __table_args__ = (
+        # At most one default; the catalogue loader makes sure there is one
+        Index("uq_language_single_default", "is_default", unique=True, postgresql_where=text("is_default")),
+    )
+
+
+class Metric(ReferenceMixin, Base):
+    """The catalogue of what can be measured. Names live in MetricTranslation."""
+    __tablename__ = "metric"
+
+    key = Column(Text, nullable=False, unique=True)  # e.g. "battery_power"; language-neutral
+    unit = Column(Text, nullable=False)  # storage unit: W, Wh, var, %, V, A, °C, or any for a custom metric
+    kind = Column(Enum(MetricKind, name="metrickind", values_callable=_values), nullable=False)
+    level = Column(Enum(MetricLevel, name="metriclevel", values_callable=_values), nullable=False)
+    category = Column(Enum(MetricCategory, name="metriccategory", values_callable=_values), nullable=False)
+    is_active = Column(Boolean, nullable=False, server_default=text("true"))
+
+    translations = relationship("MetricTranslation", back_populates="metric")
+
+    # Revision 0003 also guards level changes with a trigger (see MetricMapping)
+    __table_args__ = (CheckConstraint("key ~ '^[a-z][a-z0-9_]*$'", name="ck_metric_key_format"),)
+
+
+class MetricTranslation(TimestampMixin, Base):
+    """A metric's display name and sign note in one language."""
+    __tablename__ = "metric_translation"
+
+    metric_id = Column(Integer, ForeignKey("metric.id"), primary_key=True)
+    language_code = Column(Text, ForeignKey("language.code"), primary_key=True)
+    name = Column(Text, nullable=False)  # e.g. "Netzleistung"
+    sign_note = Column(Text, nullable=True)  # e.g. "positiv = Netzbezug"
+
+    metric = relationship("Metric", back_populates="translations")
+
+
+class MetricMapping(ReferenceMixin, Base):
+    """Which source channel feeds which metric, read and applied by the bridge.
+
+    Revision 0003 adds a trigger the models cannot express: the metric's level
+    must allow asset_id to be filled in (asset, both) or empty (site, both).
+    """
+    __tablename__ = "metric_mapping"
+
+    site_id = Column(Integer, ForeignKey("site.id"), nullable=False)
+    asset_id = Column(Integer, nullable=True)  # empty for a site-wide value
+    metric_id = Column(Integer, ForeignKey("metric.id"), nullable=False)
+    source = Column(Text, nullable=False)  # "openems" in 1.0
+    source_address = Column(Text, nullable=False)  # component/channel, e.g. "ess0/ActivePower"
+    scale = Column(Numeric, nullable=False, server_default=text("1"))  # multiplier on the raw value
+    is_enabled = Column(Boolean, nullable=False, server_default=text("true"))
+
+    __table_args__ = (
+        UniqueConstraint("site_id", "source", "source_address", name="uq_metric_mapping_site_source_address"),
+        # The asset must belong to the site (not checked while asset_id is empty)
+        ForeignKeyConstraint(
+            ["asset_id", "site_id"], ["assets.id", "assets.site_id"],
+            name="fk_metric_mapping_asset_site",
+        ),
+    )
+
+
+class Tariff(ReferenceMixin, Base):
+    """Import and export price of a site over a period. valid_to is inclusive; empty means open-ended."""
+    __tablename__ = "tariff"
+
+    site_id = Column(Integer, ForeignKey("site.id"), nullable=False)
+    valid_from = Column(Date, nullable=False)
+    valid_to = Column(Date, nullable=True)
+    # Prices are per kWh, while energy is stored in Wh: divide Wh by 1000 before pricing
+    import_price_per_kwh = Column(
+        Numeric(10, 6), nullable=False, comment="Price per kWh imported, in currency. Energy is stored in Wh.",
+    )
+    export_price_per_kwh = Column(
+        Numeric(10, 6), nullable=False, comment="Price per kWh exported, in currency. Energy is stored in Wh.",
+    )
+    currency = Column(CHAR(3), nullable=False)
+    label = Column(Text, nullable=True)  # e.g. the supplier and contract name
+
+    __table_args__ = (
+        CheckConstraint("valid_to IS NULL OR valid_to >= valid_from", name="ck_tariff_valid_period"),
+        _currency_check("tariff", "currency"),
+        # Periods of one site cannot overlap. '[]': both ends inclusive; a NULL valid_to is unbounded.
+        # Needs the btree_gist extension for the "site_id WITH =" part (revision 0003).
+        ExcludeConstraint(
+            ("site_id", "="),
+            (func.daterange(Column("valid_from", Date), Column("valid_to", Date), "[]"), "&&"),
+            using="gist", name="ex_tariff_no_overlap",
+        ),
+    )
+
+
+class FixedAsset(ReferenceMixin, Base):
+    """The finance view of an asset; only the external reference when an ERP is the master."""
+    __tablename__ = "fixed_asset"
+
+    portfolio_id = Column(Integer, ForeignKey("portfolio.id"), nullable=False)
+    reference = Column(Text, nullable=False)  # unique within the portfolio
+    description = Column(Text, nullable=False)
+    acquisition_date = Column(Date, nullable=True)
+    acquisition_cost = Column(Numeric(14, 2), nullable=True)  # in currency
+    currency = Column(CHAR(3), nullable=False)
+    expected_life_months = Column(Integer, nullable=True)
+    external_system = Column(Text, nullable=True)  # the ERP's name
+    external_id = Column(Text, nullable=True)  # its asset number
+
+    __table_args__ = (
+        UniqueConstraint("portfolio_id", "reference", name="uq_fixed_asset_portfolio_reference"),
+        _currency_check("fixed_asset", "currency"),
+    )
+
+
+class FixedAssetLink(ReferenceMixin, Base):
+    """Links operational assets to a fixed asset. Whether the two may sit in different
+    portfolios is an open item (DATA_MODEL.md §5), so nothing enforces it yet."""
+    __tablename__ = "fixed_asset_link"
+
+    fixed_asset_id = Column(Integer, ForeignKey("fixed_asset.id"), nullable=False)
+    asset_id = Column(Integer, ForeignKey("assets.id"), nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("fixed_asset_id", "asset_id", name="uq_fixed_asset_link_pair"),
     )
 
 

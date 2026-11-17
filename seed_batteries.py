@@ -33,6 +33,7 @@ from sqlalchemy import text
 
 from database import SessionLocal
 from mvp_sites import site_for_new_asset
+from seed_metrics import CatalogueError, load_metric_catalogue
 from models import (
     Asset, AssetType, GridConnectionStatus, AssetStatus,
     StateOfCharge, DispatchCommand, GridSignal,
@@ -306,8 +307,10 @@ def make_grid_signals() -> list:
 # Demo data emptied by --reset. source_connection is configuration and stays.
 RESET_TABLES = (
     "dispatch_commands", "state_of_charge", "grid_signals",
+    "metric_mapping", "tariff", "fixed_asset_link", "fixed_asset",
     "discovered_component", "assets", "site", "portfolio",
 )
+# Not emptied: language, metric and metric_translation (the catalogue) and source_connection
 
 
 def seed(reset: bool = False):
@@ -319,6 +322,13 @@ def seed(reset: bool = False):
             print(f"Emptied: {', '.join(RESET_TABLES)}\n")
         elif db.query(Asset).first() is not None:
             print("❌ The database already has assets. Run with --reset to empty the demo data first.")
+            sys.exit(1)
+
+        # The catalogue first (DATA_MODEL.md §7): every install has it, demo or not
+        try:
+            load_metric_catalogue(db)
+        except CatalogueError as error:
+            print(f"❌ Metric catalogue not loaded: {error}")
             sys.exit(1)
 
         for asset in all_assets:

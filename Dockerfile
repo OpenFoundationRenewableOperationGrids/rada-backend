@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt -r bridge/requirements.txt
 COPY *.py .
 COPY alembic.ini .
 COPY alembic/ alembic/
+COPY seeds/ seeds/
 # The OpenEMS bridge runs from the same image as a second service:
 #   command: python -m bridge
 COPY bridge/ bridge/
@@ -23,5 +24,6 @@ USER appuser
 
 EXPOSE 8000
 
-# Apply pending migrations, then start the API (exec: uvicorn receives stop signals)
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn main:app --host 0.0.0.0 --port 8000"]
+# Apply pending migrations, load the metric catalogue (idempotent), then start the API
+# (exec: uvicorn receives stop signals)
+CMD ["sh", "-c", "alembic upgrade head && python seed_metrics.py && exec uvicorn main:app --host 0.0.0.0 --port 8000"]
