@@ -22,8 +22,8 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timedelta
 from math import ceil
-from database import engine, SessionLocal
-from models import Base, Asset, AssetType, StateOfCharge, GridConnectionStatus, AssetStatus
+from database import SessionLocal
+from models import Asset, AssetType, StateOfCharge, GridConnectionStatus, AssetStatus
 from llm_service import ask_grid_question_stream
 from telemetry_simulator import run as run_simulator
 
@@ -59,9 +59,6 @@ def verify_api_key(api_key: str = Security(api_key_header)):
         return
     if api_key != API_KEY:
         raise HTTPException(status_code=403, detail="Invalid or missing API key")
-
-
-Base.metadata.create_all(bind=engine)
 
 
 @asynccontextmanager

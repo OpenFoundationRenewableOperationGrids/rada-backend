@@ -4,7 +4,8 @@ conftest.py
 Test setup — points the app at a dedicated `rada_test` Postgres database
 (derived from DATABASE_URL, never rada_dev) so tests never touch dev
 data, forces a known API_KEY/AUTH_ENABLED regardless of the developer's
-own .env, and resets the schema before the test session runs.
+own .env, and builds the schema by running the Alembic migrations before
+the test session runs.
 """
 
 import os
@@ -24,9 +25,25 @@ from fastapi.testclient import TestClient
 
 import database
 import models  # noqa: F401 — registers all tables on database.Base.metadata
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import text
 
-database.Base.metadata.drop_all(bind=database.engine)
-database.Base.metadata.create_all(bind=database.engine)
+ALEMBIC_INI = os.path.join(os.path.dirname(__file__), "..", "alembic.ini")
+
+# Guard: the next step drops every table, so only ever run it on a test DB
+if not database.engine.url.database.endswith("_test"):
+    raise RuntimeError(
+        f"Refusing to reset database {database.engine.url.database!r}: "
+        "the test schema is only rebuilt on a database whose name ends in _test."
+    )
+
+# Rebuild rada_test from the migrations, exactly as a new install would be
+with database.engine.begin() as conn:
+    conn.execute(text("DROP SCHEMA public CASCADE"))
+    conn.execute(text("CREATE SCHEMA public"))
+database.engine.dispose()  # migrations start on a fresh connection
+command.upgrade(Config(ALEMBIC_INI), "head")
 
 import main
 
@@ -55,6 +72,11 @@ def clean_tables():
     finally:
         session.close()
     yield
+
+
+@pytest.fixture()
+def alembic_config():
+    return Config(ALEMBIC_INI)
 
 
 @pytest.fixture()

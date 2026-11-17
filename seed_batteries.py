@@ -1,7 +1,8 @@
 """
-seed_data.py
-Drops and recreates all tables, then populates 30 days of realistic
-grid-scale historical data.
+seed_batteries.py
+Populates the MVP tables with a demo fleet and 30 days of realistic
+grid-scale historical data. It never creates or drops tables: the schema
+comes from the migrations, so run `alembic upgrade head` first.
 
 Assets modelled:
   - 30 x Battery BESS units (real-world manufacturers)
@@ -16,16 +17,20 @@ History depth:
 Units: MW and MWh throughout (grid-scale standard).
 
 Usage:
-    python seed_data.py
+    python seed_batteries.py           # refuses if assets already exist
+    python seed_batteries.py --reset   # empties the MVP tables first
 """
 
+import argparse
 import sys
 import os
 import math
 import random
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from database import Base, engine, SessionLocal
+from sqlalchemy import text
+
+from database import SessionLocal
 from models import (
     Asset, AssetType, GridConnectionStatus, AssetStatus,
     StateOfCharge, DispatchCommand, GridSignal,
@@ -51,13 +56,7 @@ SOLAR_PROFILE = [
     0.26, 0.10, 0.02, 0.00, 0.00, 0.00,
 ]
 
-# ── 1. Recreate all tables ────────────────────────────────────────────────────
-print("Dropping and recreating all tables...")
-Base.metadata.drop_all(bind=engine)
-Base.metadata.create_all(bind=engine)
-print("Tables created.\n")
-
-# ── 2. Assets ─────────────────────────────────────────────────────────────────
+# ── 1. Assets ─────────────────────────────────────────────────────────────────
 batteries = [
     # Tesla Megapack 2 XL — Saclay (Île-de-France)
     Asset(asset_type=AssetType.BATTERY, eic_code="17W-TM2XL-001---X", name="Tesla Megapack 2 XL - Unit 01",         max_capacity_mwh=4.0,   max_charge_rate_mw=1.9,   max_discharge_rate_mw=1.9,   reactive_power_capacity_mvar=0.95,  efficiency=0.94, latitude=48.7115, longitude=2.1710),
@@ -128,7 +127,7 @@ wind_assets = [
 all_assets = batteries + solar_assets + wind_assets
 
 
-# ── 3. StateOfCharge ──────────────────────────────────────────────────────────
+# ── 2. StateOfCharge ──────────────────────────────────────────────────────────
 
 def make_soc_records(asset: Asset) -> list:
     records = []
@@ -223,7 +222,7 @@ def make_soc_records(asset: Asset) -> list:
     return records
 
 
-# ── 4. Dispatch Commands ──────────────────────────────────────────────────────
+# ── 3. Dispatch Commands ──────────────────────────────────────────────────────
 
 COMMAND_TYPES = {
     AssetType.BATTERY: ["charge", "discharge", "frequency_response", "standby", "peak_shave"],
@@ -256,7 +255,7 @@ def make_dispatch_commands(asset: Asset) -> list:
     return records
 
 
-# ── 5. Grid Signals ───────────────────────────────────────────────────────────
+# ── 4. Grid Signals ───────────────────────────────────────────────────────────
 
 def make_grid_signals() -> list:
     records = []
@@ -302,9 +301,20 @@ def make_grid_signals() -> list:
 
 # ── Seed ──────────────────────────────────────────────────────────────────────
 
-def seed():
+MVP_TABLES = "dispatch_commands, state_of_charge, grid_signals, assets"
+
+
+def seed(reset: bool = False):
     db = SessionLocal()
     try:
+        if reset:
+            # Empty the data only; the tables themselves come from the migrations
+            db.execute(text(f"TRUNCATE {MVP_TABLES} RESTART IDENTITY"))
+            print("MVP tables emptied.\n")
+        elif db.query(Asset).first() is not None:
+            print("❌ The database already has assets. Run with --reset to empty the MVP tables first.")
+            sys.exit(1)
+
         db.add_all(all_assets)
         db.flush()
         print(f"✅ {len(batteries)} battery assets")
@@ -346,4 +356,6 @@ def seed():
 
 
 if __name__ == "__main__":
-    seed()
+    parser = argparse.ArgumentParser(description="Load the MVP demo fleet (run `alembic upgrade head` first).")
+    parser.add_argument("--reset", action="store_true", help="empty the MVP tables before seeding")
+    seed(reset=parser.parse_args().reset)

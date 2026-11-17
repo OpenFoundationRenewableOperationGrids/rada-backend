@@ -155,15 +155,14 @@ rada-backend/
 ├── models.py               # All SQLAlchemy ORM models
 ├── llm_service.py          # vLLM (OpenAI-compatible) prompt building and streaming
 ├── telemetry_simulator.py  # Telemetry simulator, started from main.py (TELEMETRY_SIMULATOR)
-├── seed_batteries.py       # Drops the tables and seeds 30 days of history for batteries,
-│                           #   solar and wind farms (run inside the container)
+├── seed_batteries.py       # Seeds 30 days of history for batteries, solar and wind farms
+│                           #   (run after `alembic upgrade head`; --reset empties the MVP tables)
 ├── grid_signal_fetcher.py  # RTE grid signals — not wired into main.py yet
-├── create_tables.py        # Creates missing tables, without touching existing ones
-├── migrations/             # SQL migrations for existing databases (see §9)
+├── alembic/, alembic.ini   # Database migrations (see docs/MIGRATIONS.md)
 ├── bridge/                 # OpenEMS bridge: reads OpenEMS Backends over B2B and posts
 │                           #   to the API; runs as its own service (see bridge/README.md)
-├── docs/                   # DATA_MODEL.md (V1.0 target schema and metric catalogue)
-│                           #   and findings notes (b2b-findings.md)
+├── docs/                   # DATA_MODEL.md (V1.0 target schema and metric catalogue),
+│                           #   MIGRATIONS.md and findings notes (b2b-findings.md)
 ├── seeds/                  # Seed data: metric catalogue (metrics.toml) and the
 │                           #   default OpenEMS mapping template (openems_mapping.toml)
 ├── tests/                  # pytest suite (see TESTING.md)
@@ -502,6 +501,14 @@ cp .env.example .env
 
 Then set at least `DATABASE_URL` and `VLLM_BASE_URL` (see [Environment Configuration](#7-environment-configuration)).
 
+### Create the schema
+
+```bash
+alembic upgrade head
+```
+
+Migrations are the only thing that creates or changes tables. See [docs/MIGRATIONS.md](docs/MIGRATIONS.md), including the pinned TimescaleDB container for local development.
+
 ### Run the API locally
 
 ```bash
@@ -522,21 +529,9 @@ The VPS (Hetzner CAX11, **ARM64**, Ubuntu) runs Docker Compose at `/var/www/dock
 
 ### Upgrading an existing database
 
-`Base.metadata.create_all()` (run at startup and by `create_tables.py`) only creates **missing tables** — it never adds or alters columns on a table that already exists. When a release changes an existing model, run its SQL file from `migrations/` on the existing database **before** deploying the new API image. The files are idempotent, so running one twice is harmless.
+The API container runs `alembic upgrade head` before it starts, so pending migrations are applied on every deploy. A database created before Alembic must be stamped once first: follow the one-off upgrade in [docs/MIGRATIONS.md](docs/MIGRATIONS.md).
 
-```bash
-# Production: TimescaleDB runs in its own container
-docker exec -i <db_container> psql -U <db_user> -d <db_name> < migrations/001_assets_gps_edge.sql
-
-# Local development
-psql "$DATABASE_URL" -f migrations/001_assets_gps_edge.sql
-```
-
-| File | Change |
-|---|---|
-| `001_assets_gps_edge.sql` | Adds `latitude`, `longitude` and `edge_id` to `assets` |
-
-> Alembic is planned to replace these hand-written files with versioned migrations.
+> **Stamp before the new image starts.** On a database that is not stamped, the migrations fail and the API container does not start.
 
 ### Standard deploy sequence
 
@@ -561,6 +556,8 @@ Seed scripts run **inside** the running container:
 ```bash
 docker exec grid_api python seed_batteries.py
 ```
+
+The script refuses to run when assets already exist. `--reset` empties the MVP tables first, which deletes **all** their data, including the assets fed by the OpenEMS bridge.
 
 ### Traefik & SSL
 

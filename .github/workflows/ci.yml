@@ -35,7 +35,7 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: timescale/timescaledb:latest-pg16
+        image: timescale/timescaledb:2.32.0-pg16   # pinned by hand, see docs/MIGRATIONS.md
         env:
           POSTGRES_USER: rada
           POSTGRES_PASSWORD: rada
@@ -45,8 +45,8 @@ jobs:
           --health-cmd "pg_isready -U rada"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      # conftest.py swaps the db name for rada_test
-      DATABASE_URL: postgresql://rada:rada@localhost:5432/rada_dev
+      # The service's POSTGRES_* database; conftest.py would force rada_test anyway
+      DATABASE_URL: postgresql://rada:rada@localhost:5432/rada_test
       # Dummy endpoint: llm_service is imported by main.py, never called in tests
       VLLM_BASE_URL: http://localhost:9/v1
     steps:
@@ -56,6 +56,8 @@ jobs:
           python-version: "3.11"   # same as Dockerfile
           cache: pip
       - run: pip install -r requirements-dev.txt
+      - name: Migrations on an empty database
+        run: alembic upgrade head && alembic check
       - run: python -m pytest -v   # as in TESTING.md: puts repo root on sys.path
 
   docker-build:
