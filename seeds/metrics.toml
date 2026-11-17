@@ -1,0 +1,165 @@
+# seeds/metrics.toml
+#
+# The metric catalogue shipped with RADA (BE-02, docs/DATA_MODEL.md §3).
+# Loaded by the seed script into the language, metric and metric_translation
+# tables. Core and optional metrics cannot be deleted; custom metrics are
+# created by an administrator through POST /metrics, never here.
+#
+# Units are the storage units: W, Wh, var, %, V, A, °C.
+# kind:     instantaneous | cumulative | state
+# level:    site | asset | both
+# category: core (has KPIs) | optional (charted and exported, no KPI)
+
+[[language]]
+code = "en"
+name = "English"
+is_default = true
+
+[[language]]
+code = "fr"
+name = "Français"
+is_default = false
+
+[[language]]
+code = "de"
+name = "Deutsch"
+is_default = false
+
+# ── Core metrics ─────────────────────────────────────────────────────────────
+
+[[metric]]
+key = "production_power"
+unit = "W"
+kind = "instantaneous"
+level = "both"
+category = "core"
+name = { en = "Production power", fr = "Puissance produite", de = "Erzeugungsleistung" }
+sign_note = { en = "Always positive; includes every generator (PV and wind)", fr = "Toujours positive ; inclut tous les producteurs (PV et éolien)", de = "Immer positiv; umfasst alle Erzeuger (PV und Wind)" }
+
+[[metric]]
+key = "consumption_power"
+unit = "W"
+kind = "instantaneous"
+level = "site"
+category = "core"
+name = { en = "Consumption power", fr = "Puissance consommée", de = "Verbrauchsleistung" }
+sign_note = { en = "Always positive", fr = "Toujours positive", de = "Immer positiv" }
+
+[[metric]]
+key = "grid_power"
+unit = "W"
+kind = "instantaneous"
+level = "both"
+category = "core"
+name = { en = "Grid power", fr = "Puissance réseau", de = "Netzleistung" }
+sign_note = { en = "Positive is import, negative is export", fr = "Positive = soutirage, négative = injection", de = "Positiv = Netzbezug, negativ = Einspeisung" }
+
+[[metric]]
+key = "battery_power"
+unit = "W"
+kind = "instantaneous"
+level = "both"
+category = "core"
+name = { en = "Battery power", fr = "Puissance batterie", de = "Batterieleistung" }
+sign_note = { en = "Positive is discharge, negative is charge", fr = "Positive = décharge, négative = charge", de = "Positiv = Entladung, negativ = Beladung" }
+
+[[metric]]
+key = "battery_soc"
+unit = "%"
+kind = "state"
+level = "both"
+category = "core"
+name = { en = "Battery state of charge", fr = "État de charge batterie", de = "Ladezustand" }
+sign_note = { en = "0 to 100", fr = "0 à 100", de = "0 bis 100" }
+
+[[metric]]
+key = "production_energy"
+unit = "Wh"
+kind = "cumulative"
+level = "both"
+category = "core"
+name = { en = "Energy produced", fr = "Énergie produite", de = "Erzeugte Energie" }
+
+[[metric]]
+key = "consumption_energy"
+unit = "Wh"
+kind = "cumulative"
+level = "site"
+category = "core"
+name = { en = "Energy consumed", fr = "Énergie consommée", de = "Verbrauchte Energie" }
+
+[[metric]]
+key = "grid_import_energy"
+unit = "Wh"
+kind = "cumulative"
+level = "site"
+category = "core"
+name = { en = "Energy imported", fr = "Énergie soutirée", de = "Netzbezug" }
+
+[[metric]]
+key = "grid_export_energy"
+unit = "Wh"
+kind = "cumulative"
+level = "site"
+category = "core"
+name = { en = "Energy exported", fr = "Énergie injectée", de = "Netzeinspeisung" }
+
+[[metric]]
+key = "battery_charge_energy"
+unit = "Wh"
+kind = "cumulative"
+level = "both"
+category = "core"
+name = { en = "Battery charge energy", fr = "Énergie chargée", de = "Geladene Energie" }
+
+[[metric]]
+key = "battery_discharge_energy"
+unit = "Wh"
+kind = "cumulative"
+level = "both"
+category = "core"
+name = { en = "Battery discharge energy", fr = "Énergie déchargée", de = "Entladene Energie" }
+
+# ── Optional metrics ─────────────────────────────────────────────────────────
+
+[[metric]]
+key = "reactive_power"
+unit = "var"
+kind = "instantaneous"
+level = "asset"
+category = "optional"
+name = { en = "Reactive power", fr = "Puissance réactive", de = "Blindleistung" }
+
+[[metric]]
+key = "voltage"
+unit = "V"
+kind = "instantaneous"
+level = "asset"
+category = "optional"
+name = { en = "Voltage", fr = "Tension", de = "Spannung" }
+
+[[metric]]
+key = "current"
+unit = "A"
+kind = "instantaneous"
+level = "asset"
+category = "optional"
+name = { en = "Current", fr = "Courant", de = "Strom" }
+sign_note = { en = "Same sign as active power", fr = "Même signe que la puissance active", de = "Gleiches Vorzeichen wie die Wirkleistung" }
+
+[[metric]]
+key = "temperature"
+unit = "°C"
+kind = "instantaneous"
+level = "asset"
+category = "optional"
+name = { en = "Temperature", fr = "Température", de = "Temperatur" }
+
+[[metric]]
+key = "battery_stored_energy"
+unit = "Wh"
+kind = "state"
+level = "asset"
+category = "optional"
+name = { en = "Stored energy", fr = "Énergie stockée", de = "Gespeicherte Energie" }
+sign_note = { en = "MVP history only; OpenEMS does not report it", fr = "Historique MVP uniquement ; OpenEMS ne la rapporte pas", de = "Nur MVP-Historie; OpenEMS liefert diesen Wert nicht" }

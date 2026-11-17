@@ -162,7 +162,10 @@ rada-backend/
 ├── migrations/             # SQL migrations for existing databases (see §9)
 ├── bridge/                 # OpenEMS bridge: reads OpenEMS Backends over B2B and posts
 │                           #   to the API; runs as its own service (see bridge/README.md)
-├── docs/                   # Findings and design notes (e.g. b2b-findings.md)
+├── docs/                   # DATA_MODEL.md (V1.0 target schema and metric catalogue)
+│                           #   and findings notes (b2b-findings.md)
+├── seeds/                  # Seed data: metric catalogue (metrics.toml) and the
+│                           #   default OpenEMS mapping template (openems_mapping.toml)
 ├── tests/                  # pytest suite (see TESTING.md)
 ├── .github/workflows/      # CI (lint, tests, Docker build), PR title check,
 │                           #   on-demand Claude review (claude-review.yml)

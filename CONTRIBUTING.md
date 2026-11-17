@@ -70,7 +70,7 @@ New features and bug fixes should come with tests. A bug fix should include a te
 
 ## Code guidelines
 
-- **Units:** MW for power, MWh for energy, MVAr for reactive power. The sign of `power_mw` gives the charge/discharge direction.
+- **Units:** new tables store W for power, Wh for energy, var for reactive power and % for state of charge, as OpenEMS reports them. Signs follow OpenEMS: grid positive is import, battery positive is discharge (see `docs/DATA_MODEL.md` §3). The MVP columns (`power_mw`, `energy_mwh`, `reactive_power_mvar`) keep MW, MWh and MVAr until the front end has switched.
 - **UTC everywhere:** the API stores, receives and returns UTC timestamps. Conversion to local time is the frontend's job.
 - **Routes:** declare specific routes (`/assets/summary`) before parameterised ones (`/assets/{asset_id}`).
 - **LLM:** the model narrates, Python computes. Any number in an answer must come from a SQL or Python function, never from the model's own arithmetic.
