@@ -1,7 +1,9 @@
 """
-seed_data.py
-Drops and recreates all tables, then populates 30 days of realistic
-grid-scale historical data.
+seed_batteries.py
+Populates the MVP tables with a demo fleet and 30 days of realistic
+grid-scale historical data. It never creates or drops tables: the schema
+comes from the migrations, so run `alembic upgrade head` first. Each asset
+gets a site in the Demo portfolio through mvp_sites.py (transitional).
 
 Assets modelled:
   - 30 x Battery BESS units (real-world manufacturers)
@@ -16,16 +18,22 @@ History depth:
 Units: MW and MWh throughout (grid-scale standard).
 
 Usage:
-    python seed_data.py
+    python seed_batteries.py           # refuses if assets already exist
+    python seed_batteries.py --reset   # empties the demo data first (see RESET_TABLES)
 """
 
+import argparse
 import sys
 import os
 import math
 import random
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from database import Base, engine, SessionLocal
+from sqlalchemy import text
+
+from database import SessionLocal
+from mvp_sites import site_for_new_asset
+from seed_metrics import CatalogueError, load_metric_catalogue
 from models import (
     Asset, AssetType, GridConnectionStatus, AssetStatus,
     StateOfCharge, DispatchCommand, GridSignal,
@@ -51,13 +59,7 @@ SOLAR_PROFILE = [
     0.26, 0.10, 0.02, 0.00, 0.00, 0.00,
 ]
 
-# ── 1. Recreate all tables ────────────────────────────────────────────────────
-print("Dropping and recreating all tables...")
-Base.metadata.drop_all(bind=engine)
-Base.metadata.create_all(bind=engine)
-print("Tables created.\n")
-
-# ── 2. Assets ─────────────────────────────────────────────────────────────────
+# ── 1. Assets ─────────────────────────────────────────────────────────────────
 batteries = [
     # Tesla Megapack 2 XL — Saclay (Île-de-France)
     Asset(asset_type=AssetType.BATTERY, eic_code="17W-TM2XL-001---X", name="Tesla Megapack 2 XL - Unit 01",         max_capacity_mwh=4.0,   max_charge_rate_mw=1.9,   max_discharge_rate_mw=1.9,   reactive_power_capacity_mvar=0.95,  efficiency=0.94, latitude=48.7115, longitude=2.1710),
@@ -128,7 +130,7 @@ wind_assets = [
 all_assets = batteries + solar_assets + wind_assets
 
 
-# ── 3. StateOfCharge ──────────────────────────────────────────────────────────
+# ── 2. StateOfCharge ──────────────────────────────────────────────────────────
 
 def make_soc_records(asset: Asset) -> list:
     records = []
@@ -223,7 +225,7 @@ def make_soc_records(asset: Asset) -> list:
     return records
 
 
-# ── 4. Dispatch Commands ──────────────────────────────────────────────────────
+# ── 3. Dispatch Commands ──────────────────────────────────────────────────────
 
 COMMAND_TYPES = {
     AssetType.BATTERY: ["charge", "discharge", "frequency_response", "standby", "peak_shave"],
@@ -256,7 +258,7 @@ def make_dispatch_commands(asset: Asset) -> list:
     return records
 
 
-# ── 5. Grid Signals ───────────────────────────────────────────────────────────
+# ── 4. Grid Signals ───────────────────────────────────────────────────────────
 
 def make_grid_signals() -> list:
     records = []
@@ -302,10 +304,39 @@ def make_grid_signals() -> list:
 
 # ── Seed ──────────────────────────────────────────────────────────────────────
 
-def seed():
+# Demo data emptied by --reset. source_connection is configuration and stays.
+RESET_TABLES = (
+    "dispatch_commands", "state_of_charge", "grid_signals", "measurement",
+    "metric_mapping", "tariff", "fixed_asset_link", "fixed_asset",
+    "discovered_component", "assets", "site", "portfolio",
+)
+# Not emptied: language, metric and metric_translation (the catalogue) and source_connection
+
+
+def seed(reset: bool = False):
     db = SessionLocal()
     try:
-        db.add_all(all_assets)
+        if reset:
+            # Empty the data only; the tables themselves come from the migrations
+            db.execute(text(f"TRUNCATE {', '.join(RESET_TABLES)} RESTART IDENTITY"))
+            print(f"Emptied: {', '.join(RESET_TABLES)}\n")
+        elif db.query(Asset).first() is not None:
+            print("❌ The database already has assets. Run with --reset to empty the demo data first.")
+            sys.exit(1)
+
+        # The catalogue first (DATA_MODEL.md §7): every install has it, demo or not
+        try:
+            load_metric_catalogue(db)
+        except CatalogueError as error:
+            print(f"❌ Metric catalogue not loaded: {error}")
+            sys.exit(1)
+
+        for asset in all_assets:
+            asset.site = site_for_new_asset(
+                db, name=asset.name, edge_id=asset.edge_id,
+                latitude=asset.latitude, longitude=asset.longitude,
+            )
+            db.add(asset)  # in the session before the next site is flushed
         db.flush()
         print(f"✅ {len(batteries)} battery assets")
         print(f"✅ {len(solar_assets)} solar assets")
@@ -346,4 +377,9 @@ def seed():
 
 
 if __name__ == "__main__":
-    seed()
+    parser = argparse.ArgumentParser(description="Load the MVP demo fleet (run `alembic upgrade head` first).")
+    parser.add_argument(
+        "--reset", action="store_true",
+        help="empty the demo data first: " + ", ".join(RESET_TABLES) + " (source_connection is kept)",
+    )
+    seed(reset=parser.parse_args().reset)

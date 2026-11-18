@@ -4,7 +4,8 @@ conftest.py
 Test setup — points the app at a dedicated `rada_test` Postgres database
 (derived from DATABASE_URL, never rada_dev) so tests never touch dev
 data, forces a known API_KEY/AUTH_ENABLED regardless of the developer's
-own .env, and resets the schema before the test session runs.
+own .env, and builds the schema by running the Alembic migrations before
+the test session runs.
 """
 
 import os
@@ -24,9 +25,25 @@ from fastapi.testclient import TestClient
 
 import database
 import models  # noqa: F401 — registers all tables on database.Base.metadata
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import text
 
-database.Base.metadata.drop_all(bind=database.engine)
-database.Base.metadata.create_all(bind=database.engine)
+ALEMBIC_INI = os.path.join(os.path.dirname(__file__), "..", "alembic.ini")
+
+# Guard: the next step drops every table, so only ever run it on a test DB
+if not database.engine.url.database.endswith("_test"):
+    raise RuntimeError(
+        f"Refusing to reset database {database.engine.url.database!r}: "
+        "the test schema is only rebuilt on a database whose name ends in _test."
+    )
+
+# Rebuild rada_test from the migrations, exactly as a new install would be
+with database.engine.begin() as conn:
+    conn.execute(text("DROP SCHEMA public CASCADE"))
+    conn.execute(text("CREATE SCHEMA public"))
+database.engine.dispose()  # migrations start on a fresh connection
+command.upgrade(Config(ALEMBIC_INI), "head")
 
 import main
 
@@ -45,16 +62,27 @@ def db_session():
 
 @pytest.fixture(autouse=True)
 def clean_tables():
-    """Wipe asset-related tables before every test so they don't leak into each other."""
+    """Wipe every data table before each test so tests don't leak into each other."""
     session = database.SessionLocal()
     try:
-        session.execute(models.DispatchCommand.__table__.delete())
-        session.execute(models.StateOfCharge.__table__.delete())
-        session.execute(models.Asset.__table__.delete())
+        # Children before parents, so no foreign key is left pointing at a deleted row
+        session.execute(models.measurement.delete())  # a Table, not a model class
+        for model in (
+            models.DispatchCommand, models.StateOfCharge,
+            models.MetricMapping, models.Tariff, models.FixedAssetLink, models.FixedAsset,
+            models.DiscoveredComponent, models.Asset, models.Site, models.SourceConnection, models.Portfolio,
+            models.MetricTranslation, models.Metric, models.Language,
+        ):
+            session.execute(model.__table__.delete())
         session.commit()
     finally:
         session.close()
     yield
+
+
+@pytest.fixture()
+def alembic_config():
+    return Config(ALEMBIC_INI)
 
 
 @pytest.fixture()

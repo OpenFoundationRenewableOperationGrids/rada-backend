@@ -11,7 +11,7 @@ et comment en écrire de nouveaux, à partir d'exemples réels tirés de
 - **FastAPI `TestClient`** (basé sur `httpx`) — envoie de vraies requêtes HTTP à l'application
   sans lancer de serveur
 - **PostgreSQL** — une base **dédiée aux tests**, `rada_test`, séparée de la base de
-  développement (`rada_dev`). Les tests ne touchent jamais les données de dev.
+  développement (`rada`). Les tests ne touchent jamais les données de dev.
 
 `rada_test` doit exister sur le même serveur Postgres que `DATABASE_URL` (même utilisateur/hôte,
 nom de base différent) avant de lancer les tests — voir section 9.
@@ -24,6 +24,15 @@ tests/
   test_assets_crud.py    # tests des routes POST/PUT/PATCH /assets
   test_assets_gps_api.py # tests d'intégration GPS/edge_id sur les endpoints assets
   test_asset_schema.py   # tests unitaires purs du schéma Pydantic AssetCreate (pas de DB/HTTP)
+  test_migrations.py     # modèles et migrations Alembic alignés, une seule tête, downgrade/upgrade,
+                         #   et montée d'une copie du schéma MVP (stamp 0001 puis upgrade head)
+  test_site_hierarchy.py # contraintes de la hiérarchie des sites et règle transitoire mvp_sites.py
+  test_metric_catalogue.py # chargeur seed_metrics.py : idempotent, refus des changements d'unit/kind/level
+  test_metric_rules.py   # règle de niveau (triggers), tarifs sans chevauchement, immobilisations
+  test_measurement.py    # hypertable measurement, doublons ignorés, agrégat horaire, downgrade de 0004
+  test_seed_reset.py     # --reset vide toute table qui pointe vers les données de démo
+  fixtures/
+    mvp_schema.sql       # schéma MVP d'avant Alembic (pg_dump, voir son en-tête pour le régénérer)
 ```
 
 Tout nouveau fichier de test doit être placé dans `tests/` et nommé `test_*.py` pour être
@@ -49,9 +58,20 @@ from fastapi.testclient import TestClient
 
 import database
 import models  # noqa: F401 — registers all tables on database.Base.metadata
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import text
 
-database.Base.metadata.drop_all(bind=database.engine)
-database.Base.metadata.create_all(bind=database.engine)
+ALEMBIC_INI = os.path.join(os.path.dirname(__file__), "..", "alembic.ini")
+
+if not database.engine.url.database.endswith("_test"):
+    raise RuntimeError(...)
+
+with database.engine.begin() as conn:
+    conn.execute(text("DROP SCHEMA public CASCADE"))
+    conn.execute(text("CREATE SCHEMA public"))
+database.engine.dispose()
+command.upgrade(Config(ALEMBIC_INI), "head")
 
 import main
 
@@ -97,11 +117,26 @@ Points clés :
 |---|---|
 | `os.environ["DATABASE_URL"] = ... + "/rada_test"` | Redirige l'app vers la base de test **avant** d'importer `main`/`database`, quel que soit le contenu du `.env` du développeur |
 | `os.environ["API_KEY"] / ["AUTH_ENABLED"] = "true"` | Force une clé API connue et **active réellement l'authentification** pendant les tests (contrairement à un simple bypass) |
-| `Base.metadata.drop_all` puis `create_all` | Repart d'un schéma propre à chaque lancement de la suite (pas juste par test) |
+| Garde-fou `_test` | Refuse de continuer si le nom de la base ne finit pas par `_test` : l'étape suivante supprime toutes les tables |
+| `DROP SCHEMA public CASCADE` puis `alembic upgrade head` | Repart d'un schéma vide à chaque lancement de la suite (pas juste par test) et le construit avec les migrations, exactement comme une nouvelle installation |
+| `alembic_config` | La configuration Alembic, pour les tests de `test_migrations.py` |
 | `db_session` | Accès direct à la base de test, pour arranger ou vérifier l'état en base indépendamment des réponses HTTP |
-| `clean_tables` (`autouse=True`) | Vide les tables `assets`/`state_of_charge`/`dispatch_commands` avant **chaque** test pour qu'ils ne se polluent pas entre eux |
+| `clean_tables` (`autouse=True`) | Vide les tables des actifs et des sites (`dispatch_commands`, `state_of_charge`, `discovered_component`, `assets`, `site`, `source_connection`, `portfolio`) avant **chaque** test pour qu'ils ne se polluent pas entre eux |
 | `client` | `TestClient` FastAPI prêt à l'emploi, injecté par son nom dans un test |
 | `auth_headers` | Dict `{"X-API-Key": "test-api-key"}` à passer dans `headers=` de chaque requête vers une route protégée |
+
+`alembic check` ne voit ni les contraintes CHECK ou d'exclusion, ni les triggers, ni les fonctions.
+`test_migrations.py::test_objects_alembic_check_cannot_see_are_all_there` vérifie donc qu'après
+`upgrade head` ils sont exactement ceux de ses listes : toute migration qui en ajoute un doit
+compléter ces listes. Les règles elles-mêmes sont testées par insertion dans
+`test_site_hierarchy.py` et `test_metric_rules.py`.
+
+`test_migrations.py` vérifie que `models.py` et les révisions de `alembic/versions/` décrivent le
+même schéma (l'équivalent d'`alembic check`), qu'il n'y a qu'une seule tête de migration, et que
+toutes les révisions peuvent être annulées puis réappliquées. Il charge aussi
+`tests/fixtures/mvp_schema.sql` dans une base jetable `rada_mvp_test`, la marque à `0001`
+puis la monte à `head`, pour prouver qu'une base MVP existante garde ses actifs. Voir
+[docs/MIGRATIONS.md](docs/MIGRATIONS.md) pour créer une migration.
 
 > ⚠️ **Ne pas oublier `headers=auth_headers`** : comme `AUTH_ENABLED=true` dans les tests, tout
 > appel à une route protégée par `verify_api_key` (toutes sauf `/`, `/health`) sans cet en-tête
@@ -311,7 +346,7 @@ adaptés en conséquence.
    ```bash
    psql -U rada_user -h localhost -c "CREATE DATABASE rada_test;"
    ```
-   `conftest.py` se charge de (re)créer les tables à chaque lancement de la suite.
+   `conftest.py` reconstruit le schéma en jouant les migrations à chaque lancement de la suite.
 5. Lancer `python -m pytest tests/test_<ressource>.py -v` pour vérifier.
 
 ## 10. Ce que ces tests ne couvrent pas
@@ -319,5 +354,5 @@ adaptés en conséquence.
 - Le comportement du simulateur de télémétrie (`TELEMETRY_SIMULATOR` est forcé à `false`
   pendant les tests).
 - Les erreurs de connexion à Postgres elles-mêmes : si `rada_test` n'existe pas ou est
-  injoignable, `conftest.py` échoue dès l'import (`database.Base.metadata.create_all`), avant
+  injoignable, `conftest.py` échoue dès l'import (`command.upgrade`), avant
   même de lancer un test.

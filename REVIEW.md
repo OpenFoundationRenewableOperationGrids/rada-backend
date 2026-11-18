@@ -9,8 +9,8 @@ Reserve Important for findings that would break behaviour in production,
 leak data, or block a rollback:
 
 - Incorrect logic, unhandled errors that surface as a 500
-- A change to a SQLAlchemy model with no migration for the existing
-  database (`create_all()` never adds or alters columns)
+- A change to a SQLAlchemy model with no Alembic revision in the same
+  pull request (CI's `alembic check` should catch it; flag it anyway)
 - A change to a response shape, a route or a status code that is not
   flagged in the pull request description (the frontend depends on them)
 - Secrets, keys or database URLs committed, or written to logs

@@ -11,6 +11,7 @@ from openai import APIConnectionError
 
 import llm_service
 from models import Asset, AssetType
+from mvp_sites import site_for_new_asset
 
 
 def chunk(content):
@@ -48,9 +49,10 @@ def test_ask_streams_tokens(client, auth_headers, fake_create):
 
 
 def test_ask_injects_battery_data_into_system_prompt(client, db_session, auth_headers, fake_create):
+    site = site_for_new_asset(db_session, name="Battery One", edge_id=None, latitude=None, longitude=None)
     db_session.add(Asset(
         eic_code="10T-FR-BATT-01", name="Battery One", asset_type=AssetType.BATTERY,
-        max_capacity_mwh=10.0, max_charge_rate_mw=2.0, max_discharge_rate_mw=2.0,
+        max_capacity_mwh=10.0, max_charge_rate_mw=2.0, max_discharge_rate_mw=2.0, site=site,
     ))
     db_session.commit()
     calls = fake_create(iter([]))

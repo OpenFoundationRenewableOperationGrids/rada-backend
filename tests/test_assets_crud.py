@@ -176,15 +176,20 @@ def test_patch_asset_null_on_non_nullable_field_returns_422(client, db_session, 
 # --- eic_code race: the unique constraint fires on commit ---
 
 def bypass_eic_code_precheck(monkeypatch, real_lookups):
-    """Let the first `real_lookups` Query.first() calls through, then return None,
-    so the route's eic_code pre-check misses the duplicate and db.commit() raises
-    IntegrityError — as when a concurrent request inserts the same eic_code."""
+    """Let the first `real_lookups` Query.first() calls through, return None for the
+    next one (the route's eic_code pre-check), then let the rest through again, so
+    the pre-check alone misses the duplicate and db.commit() raises IntegrityError —
+    as when a concurrent request inserts the same eic_code.
+
+    Depends on the order of the Query.first() calls in the route: POST /assets does
+    the eic_code pre-check first, then mvp_sites looks up the Demo portfolio. Adding
+    a lookup to POST, PUT or PATCH /assets means revisiting `real_lookups` here."""
     real_first = Query.first
     calls = {"n": 0}
 
     def first(self):
         calls["n"] += 1
-        return real_first(self) if calls["n"] <= real_lookups else None
+        return None if calls["n"] == real_lookups + 1 else real_first(self)
 
     monkeypatch.setattr(Query, "first", first)
 
