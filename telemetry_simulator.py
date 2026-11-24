@@ -23,7 +23,9 @@ log = logging.getLogger("simulator")
 
 API_BASE_URL  = os.getenv("API_BASE_URL", "http://localhost:8000")
 INTERVAL_SEC  = int(os.getenv("SIMULATOR_INTERVAL_SEC", 600))
-API_KEY       = os.getenv("API_KEY")
+# A named key with the admin scope: it reads the asset list and posts telemetry.
+# Falls back to the legacy API_KEY until BE-09 removes it (docs/AUTH.md §6).
+API_KEY       = os.getenv("SIMULATOR_API_KEY") or os.getenv("API_KEY")
 HEADERS       = {"X-API-Key": API_KEY}
 
 # Per-asset state cache {asset_id: {field: last_value}}

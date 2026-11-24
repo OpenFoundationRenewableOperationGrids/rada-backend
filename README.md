@@ -65,7 +65,7 @@ graph TD
     Home["vLLM server (planned) - GPU inference"]
 
     User --> FE
-    FE -->|HTTPS, X-API-Key| Traefik
+    FE -->|HTTPS, session cookie or X-API-Key| Traefik
     Traefik --> API
     API --> DB
     API -.->|future: LLM inference| TS
@@ -89,8 +89,8 @@ graph TB
         LLM["POST /llm/ask  -  Ask the LLM"]
     end
 
-    subgraph AuthLayer ["Auth - APIKeyHeader"]
-        APIKey["X-API-Key header, gated by AUTH_ENABLED"]
+    subgraph AuthLayer ["Auth - auth/ package, docs/AUTH.md"]
+        APIKey["Session cookie or Bearer token (users, admin/viewer) or named X-API-Key (machines, ingest/export/admin)"]
     end
 
     subgraph LLMLayer ["LLM Service - llm_service.py"]
@@ -413,13 +413,17 @@ Streams a plain-text response token by token via `StreamingResponse`. Returns `5
 
 ## 6. Authentication, Security & CORS
 
-- **API key auth** via `APIKeyHeader` (`X-API-Key`). Gated by the `AUTH_ENABLED` environment variable:
-  - `false` locally (`.env`) — no key required during development
-  - `true` on the VPS (`.env.production`) — all routes except `/health` require a valid key
-- **`/health` is always open**, regardless of `AUTH_ENABLED` — used for container health checks and uptime monitoring.
+Full details, including the sign-in API contract (C1), are in [docs/AUTH.md](docs/AUTH.md).
+
+- **People** sign in with an email and a password (`POST /auth/login` sets an httpOnly, Secure session cookie; native apps use `POST /auth/token` and send `Authorization: Bearer`). Each account is **admin** (reads and changes configuration, manages users and keys) or **viewer** (reads only). Passwords are hashed with Argon2 (pwdlib) and must be at least 15 characters, with no composition rules. Repeated failed sign-ins are slowed down (429).
+- **Machines** use named API keys in the `X-API-Key` header, created by an administrator (`POST /api-keys`), stored hashed, shown once and revocable one by one. Scopes: `ingest` (posts telemetry/measurements; the bridge), `export` (reads data), `admin`.
+- **First run:** `GET /auth/setup-status` says whether the installation has no user yet; `POST /auth/setup` creates the first administrator, once. No default password or key is shipped.
+- **Legacy key:** the MVP's single `API_KEY` is still accepted, with full access, until the front end and the bridge have switched. It is removed before the release (BE-09).
+- `AUTH_ENABLED=false` makes every request an administrator and is refused unless `ENVIRONMENT=development`.
+- **`/`, `/health` and the sign-in routes are open** — `/health` is used for container health checks and uptime monitoring.
 - **Swagger docs (`/docs`)** are disabled in production via the `ENVIRONMENT` variable, to avoid exposing the schema and a live "try it out" console publicly.
-- **CORS** is configured via `CORSMiddleware` in `main.py` (added after app instantiation). Locally, `allow_origins` includes `http://localhost:3000`. For production, `allow_origins` must include the frontend's Vercel domain — this needs to be kept in sync whenever the frontend deployment URL changes.
-- All internal calls (e.g. the telemetry simulator posting to the API) authenticate the same way as external clients, using `HEADERS = {"X-API-Key": API_KEY}`.
+- **CORS** is configured via `CORSMiddleware` in `main.py`, from `CORS_ORIGINS` (default `http://localhost:3000`). For production it must include the frontend's domain — keep it in sync whenever the frontend deployment URL changes. The same list decides which browser origins may write with the session cookie.
+- All internal calls (e.g. the telemetry simulator posting to the API) authenticate the same way as external clients, with an `X-API-Key` header (`SIMULATOR_API_KEY`, an `admin`-scope key, falling back to the legacy `API_KEY`).
 
 ---
 
@@ -437,8 +441,14 @@ Key variables:
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | PostgreSQL/TimescaleDB connection string |
-| `API_KEY` | Shared secret for `X-API-Key` header |
-| `AUTH_ENABLED` | Toggles auth enforcement |
+| `AUTH_ENABLED` | Toggles auth enforcement; `false` is refused outside `ENVIRONMENT=development` |
+| `SESSION_SECRET` | **Required when auth is on.** Signs session tokens (32+ characters) |
+| `SESSION_TTL_HOURS` | Session lifetime (default 8) |
+| `COOKIE_SECURE` | `true` by default; `false` only for local http |
+| `CORS_ORIGINS` | Front-end origins, comma-separated (default `http://localhost:3000`) |
+| `SETUP_TOKEN` | Optional: `POST /auth/setup` then needs it in `X-Setup-Token` |
+| `FORWARDED_ALLOW_IPS` | uvicorn: trust Traefik's `X-Forwarded-For`, so failed sign-ins are counted per client |
+| `API_KEY` | **Deprecated.** The MVP's single shared key; removed in BE-09 |
 | `ENVIRONMENT` | `development` / `production` — controls Swagger docs visibility |
 | `SIMULATOR_INTERVAL_SEC` | Interval (seconds) between simulated telemetry posts |
 | `VLLM_BASE_URL` | **Required.** vLLM's OpenAI-compatible endpoint, e.g. `http://<host>:8000/v1`. The app refuses to start without it, so prompts (which include DB data) can never fall back to `api.openai.com` |

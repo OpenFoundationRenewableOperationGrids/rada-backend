@@ -3,8 +3,8 @@ conftest.py
 
 Test setup — points the app at a dedicated `rada_test` Postgres database
 (derived from DATABASE_URL, never rada_dev) so tests never touch dev
-data, forces a known API_KEY/AUTH_ENABLED regardless of the developer's
-own .env, and builds the schema by running the Alembic migrations before
+data, forces a known API_KEY/AUTH_ENABLED/SESSION_SECRET regardless of the
+developer's own .env, and builds the schema by running the Alembic migrations before
 the test session runs.
 """
 
@@ -17,6 +17,11 @@ _dev_url = os.environ["DATABASE_URL"]
 os.environ["DATABASE_URL"] = _dev_url.rsplit("/", 1)[0] + "/rada_test"
 os.environ["API_KEY"] = "test-api-key"
 os.environ["AUTH_ENABLED"] = "true"
+os.environ["SESSION_SECRET"] = "test-session-secret-at-least-32-characters-long"
+os.environ["SESSION_TTL_HOURS"] = "8"
+os.environ["COOKIE_SECURE"] = "true"
+os.environ["CORS_ORIGINS"] = "http://localhost:3000"
+os.environ.pop("SETUP_TOKEN", None)
 os.environ["TELEMETRY_SIMULATOR"] = "false"
 os.environ["ENVIRONMENT"] = "development"
 
@@ -24,7 +29,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import database
-import models  # noqa: F401 — registers all tables on database.Base.metadata
+import models
+from auth import throttle  # noqa: F401 — registers all tables on database.Base.metadata
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
@@ -72,11 +78,13 @@ def clean_tables():
             models.MetricMapping, models.Tariff, models.FixedAssetLink, models.FixedAsset,
             models.DiscoveredComponent, models.Asset, models.Site, models.SourceConnection, models.Portfolio,
             models.MetricTranslation, models.Metric, models.Language,
+            models.ApiKey, models.AppUser,
         ):
             session.execute(model.__table__.delete())
         session.commit()
     finally:
         session.close()
+    throttle.reset_all()
     yield
 
 
@@ -87,7 +95,8 @@ def alembic_config():
 
 @pytest.fixture()
 def client():
-    with TestClient(main.app) as c:
+    # https, so the Secure session cookie is sent back like a browser would
+    with TestClient(main.app, base_url="https://testserver") as c:
         yield c
 
 

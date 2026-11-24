@@ -31,6 +31,8 @@ tests/
   test_metric_rules.py   # règle de niveau (triggers), tarifs sans chevauchement, immobilisations
   test_measurement.py    # hypertable measurement, doublons ignorés, agrégat horaire, downgrade de 0004
   test_seed_reset.py     # --reset vide toute table qui pointe vers les données de démo
+  test_auth.py           # BE-04 : premier admin, connexion cookie/jeton, déconnexion, règles de mot de passe,
+                         #   ralentissement, rôles admin/lecteur, clés API (portées, révocation), API_KEY héritée
   fixtures/
     mvp_schema.sql       # schéma MVP d'avant Alembic (pg_dump, voir son en-tête pour le régénérer)
 ```
@@ -116,13 +118,13 @@ Points clés :
 | Élément | Rôle |
 |---|---|
 | `os.environ["DATABASE_URL"] = ... + "/rada_test"` | Redirige l'app vers la base de test **avant** d'importer `main`/`database`, quel que soit le contenu du `.env` du développeur |
-| `os.environ["API_KEY"] / ["AUTH_ENABLED"] = "true"` | Force une clé API connue et **active réellement l'authentification** pendant les tests (contrairement à un simple bypass) |
+| `os.environ["API_KEY"] / ["AUTH_ENABLED"] = "true"` / `["SESSION_SECRET"]` | Force une clé API connue (l'`API_KEY` héritée), un secret de session, et **active réellement l'authentification** pendant les tests (contrairement à un simple bypass) |
 | Garde-fou `_test` | Refuse de continuer si le nom de la base ne finit pas par `_test` : l'étape suivante supprime toutes les tables |
 | `DROP SCHEMA public CASCADE` puis `alembic upgrade head` | Repart d'un schéma vide à chaque lancement de la suite (pas juste par test) et le construit avec les migrations, exactement comme une nouvelle installation |
 | `alembic_config` | La configuration Alembic, pour les tests de `test_migrations.py` |
 | `db_session` | Accès direct à la base de test, pour arranger ou vérifier l'état en base indépendamment des réponses HTTP |
-| `clean_tables` (`autouse=True`) | Vide les tables des actifs et des sites (`dispatch_commands`, `state_of_charge`, `discovered_component`, `assets`, `site`, `source_connection`, `portfolio`) avant **chaque** test pour qu'ils ne se polluent pas entre eux |
-| `client` | `TestClient` FastAPI prêt à l'emploi, injecté par son nom dans un test |
+| `clean_tables` (`autouse=True`) | Vide les tables des actifs et des sites (`dispatch_commands`, `state_of_charge`, `discovered_component`, `assets`, `site`, `source_connection`, `portfolio`, `api_key`, `app_user`…) et remet à zéro le compteur d'échecs de connexion avant **chaque** test pour qu'ils ne se polluent pas entre eux |
+| `client` | `TestClient` FastAPI prêt à l'emploi, en `https://testserver` pour que le cookie de session `Secure` soit renvoyé comme par un navigateur |
 | `auth_headers` | Dict `{"X-API-Key": "test-api-key"}` à passer dans `headers=` de chaque requête vers une route protégée |
 
 `alembic check` ne voit ni les contraintes CHECK ou d'exclusion, ni les triggers, ni les fonctions.
@@ -139,8 +141,9 @@ puis la monte à `head`, pour prouver qu'une base MVP existante garde ses actifs
 [docs/MIGRATIONS.md](docs/MIGRATIONS.md) pour créer une migration.
 
 > ⚠️ **Ne pas oublier `headers=auth_headers`** : comme `AUTH_ENABLED=true` dans les tests, tout
-> appel à une route protégée par `verify_api_key` (toutes sauf `/`, `/health`) sans cet en-tête
-> renvoie `403`, pas le code attendu par le test.
+> appel à une route protégée (toutes sauf `/`, `/health` et les routes de connexion) sans cet
+> en-tête renvoie `401`, pas le code attendu par le test. Pour tester un rôle ou une portée, voir
+> les fixtures `admin` et `viewer` de `tests/test_auth.py`.
 
 ## 4. Lancer les tests
 

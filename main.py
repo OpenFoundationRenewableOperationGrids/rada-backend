@@ -3,15 +3,15 @@ main.py
 
 FastAPI application entrypoint. Defines the REST API for managing grid
 assets (batteries, solar, wind farms), their telemetry/state-of-charge
-history, and the LLM-based grid Q&A endpoint. Protected by a shared
-X-API-Key header (see verify_api_key).
+history, and the LLM-based grid Q&A endpoint. Every route except /, /health
+and the sign-in routes needs a user session or an API key; the auth package
+decides who may do what (docs/AUTH.md).
 """
 
 import os
 import threading
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, Query, Path, HTTPException, Security
-from fastapi.security.api_key import APIKeyHeader
+from fastapi import FastAPI, Depends, Query, Path, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from openai import APIError
@@ -22,7 +22,10 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timedelta
 from math import ceil
-from database import SessionLocal
+from auth import config as auth_config
+from auth.deps import require_admin, require_ingest, require_read
+from auth.routes import api_keys_router, router as auth_router, users_router
+from database import get_db
 from models import Asset, AssetType, StateOfCharge, GridConnectionStatus, AssetStatus
 from llm_service import ask_grid_question_stream
 from mvp_sites import site_for_new_asset
@@ -51,15 +54,8 @@ RADA_BANNER = """
 
 print(RADA_BANNER)
 
-# --- API Key authentication ---
-API_KEY = os.getenv("API_KEY")
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-def verify_api_key(api_key: str = Security(api_key_header)):
-    if os.getenv("AUTH_ENABLED", "true").lower() == "false":
-        return
-    if api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid or missing API key")
+# Refuse to start with an unsafe auth configuration (no SESSION_SECRET, auth off outside development)
+auth_config.settings.validate()
 
 
 @asynccontextmanager
@@ -75,7 +71,8 @@ app = FastAPI(
     description=(
         "REST API for RADA — manages grid assets (batteries, solar and wind farms), "
         "their telemetry/state-of-charge history, and grid Q&A via an LLM. "
-        "Most endpoints require an `X-API-Key` header — use the **Authorize** button above."
+        "Endpoints need a session (cookie from `POST /auth/login`, or `Authorization: Bearer` "
+        "from `POST /auth/token`) or an `X-API-Key` — use the **Authorize** button above."
     ),
     lifespan=lifespan,
     docs_url="/docs" if os.getenv("ENVIRONMENT") in ("development", "staging") else None,
@@ -84,19 +81,15 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=auth_config.settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Dependency to get a DB session
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+app.include_router(auth_router)
+app.include_router(users_router)
+app.include_router(api_keys_router)
 
 
 # --- Pydantic schemas ---
@@ -225,7 +218,7 @@ def health_check():
 @app.post(
     "/assets",
     status_code=201,
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(require_admin)],
     response_model=AssetActionResponse,
     tags=["Assets"],
     summary="Create a new asset",
@@ -258,7 +251,7 @@ def create_asset(payload: AssetCreate, db: Session = Depends(get_db)):
 
 @app.put(
     "/assets/{asset_id}",
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(require_admin)],
     response_model=AssetActionResponse,
     tags=["Assets"],
     summary="Fully replace an asset",
@@ -292,7 +285,7 @@ def replace_asset(asset_id: int, payload: AssetUpdate, db: Session = Depends(get
 
 @app.patch(
     "/assets/{asset_id}",
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(require_admin)],
     response_model=AssetActionResponse,
     tags=["Assets"],
     summary="Partially update an asset",
@@ -334,7 +327,7 @@ def update_asset(asset_id: int, payload: AssetPatch, db: Session = Depends(get_d
 @app.post(
     "/assets/{asset_id}/telemetry",
     status_code=201,
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(require_ingest)],
     tags=["Assets"],
     summary="Record a telemetry reading",
     description="Appends a new state-of-charge/telemetry record for the given asset. "
@@ -370,7 +363,7 @@ def add_telemetry(
 
 @app.get(
     "/assetslist",
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(require_read)],
     tags=["Assets"],
     summary="List all assets with their latest reading",
     description="Returns every asset that has at least one telemetry record, joined with its "
@@ -449,7 +442,7 @@ def get_assets(db: Session = Depends(get_db)):
 
 @app.get(
     "/assets/summary",
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(require_read)],
     tags=["Assets"],
     summary="Fleet-wide power/energy summary",
     description="Aggregates the latest reading of every asset into fleet-wide totals, "
@@ -523,7 +516,7 @@ def get_asset_summary(db: Session = Depends(get_db)):
 
 @app.get(
     "/assets/{asset_id}/soc",
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(require_read)],
     tags=["Assets"],
     summary="Get an asset's state-of-charge/telemetry history",
     description="Two modes: `S` returns only the latest record; `D` returns history over a "
@@ -761,7 +754,7 @@ def get_asset_soc(
 
 @app.post(
     "/llm/ask",
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(require_read)],
     tags=["LLM"],
     summary="Ask a natural-language question about the grid",
     description="Streams back a plain-text answer from the LLM, with live battery asset "

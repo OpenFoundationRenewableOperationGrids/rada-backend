@@ -28,6 +28,7 @@ UNCHECKED_CONSTRAINTS = {
     "ck_metric_key_format",
     "ck_tariff_valid_period", "ck_tariff_currency_iso4217", "ex_tariff_no_overlap",
     "ck_fixed_asset_currency_iso4217",
+    "ck_app_user_email_lowercase", "ck_app_user_local_has_password",
 }
 UNCHECKED_TRIGGERS = {
     ("metric_mapping", "metric_mapping_check_level"),

@@ -5,7 +5,8 @@ SQLAlchemy ORM models — the database schema, kept in step with the Alembic
 migrations (docs/MIGRATIONS.md). Defines the V1.0 site hierarchy (Portfolio,
 SourceConnection, Site, DiscoveredComponent; docs/DATA_MODEL.md §2), the
 metric catalogue (Language, Metric, MetricTranslation, MetricMapping; §2-§3),
-the finance tables (Tariff, FixedAsset, FixedAssetLink; §5), the measurement
+the finance tables (Tariff, FixedAsset, FixedAssetLink; §5), the security
+tables (AppUser, ApiKey; §5, used by the auth package), the measurement
 hypertable (§4) and the MVP tables: Asset (batteries, solar and wind farms,
 now attached to a site), their StateOfCharge/telemetry history, grid-wide
 GridSignal readings, and DispatchCommand records sent to assets.
@@ -71,6 +72,22 @@ class MetricCategory(PyEnum):
     CORE = "core"          # has KPIs
     OPTIONAL = "optional"  # charted and exported, no KPI
     CUSTOM = "custom"      # created by an administrator
+
+
+class UserRole(PyEnum):
+    ADMIN = "admin"    # reads everything, changes configuration, manages users and keys
+    VIEWER = "viewer"  # reads only
+
+
+class AuthMethod(PyEnum):
+    LOCAL = "local"  # email and password checked by RADA; the only method used in 1.0
+    SSO = "sso"      # signs in through an identity provider (later, see docs/AUTH.md)
+
+
+class ApiKeyScope(PyEnum):
+    INGEST = "ingest"  # posts measurements and telemetry (the bridge)
+    EXPORT = "export"  # reads data
+    ADMIN = "admin"    # everything an administrator may do, except managing users and keys
 
 
 def _values(enum_cls):
@@ -309,6 +326,45 @@ class FixedAssetLink(ReferenceMixin, Base):
     __table_args__ = (
         UniqueConstraint("fixed_asset_id", "asset_id", name="uq_fixed_asset_link_pair"),
     )
+
+
+class AppUser(ReferenceMixin, Base):
+    """A person who signs in (DATA_MODEL.md §5). Emails are stored lowercased."""
+    __tablename__ = "app_user"
+
+    email = Column(Text, nullable=False, unique=True)
+    password_hash = Column(Text, nullable=True)  # Argon2 (pwdlib); empty for an SSO user
+    role = Column(Enum(UserRole, name="userrole", values_callable=_values), nullable=False)
+    auth_method = Column(
+        Enum(AuthMethod, name="authmethod", values_callable=_values),
+        nullable=False, server_default="local",
+    )
+    external_subject = Column(Text, nullable=True)  # the identity provider's subject, for SSO later
+    is_active = Column(Boolean, nullable=False, server_default=text("true"))
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+    # Session tokens issued before this instant are refused: set by logout, a
+    # password change or a deactivation, it ends every session of the user
+    sessions_valid_after = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("email = lower(email)", name="ck_app_user_email_lowercase"),
+        CheckConstraint(
+            "auth_method <> 'local' OR password_hash IS NOT NULL", name="ck_app_user_local_has_password",
+        ),
+    )
+
+
+class ApiKey(ReferenceMixin, Base):
+    """A named key for a machine integration (DATA_MODEL.md §5). Only its SHA-256 is stored."""
+    __tablename__ = "api_key"
+
+    name = Column(Text, nullable=False, unique=True)  # one per integration, e.g. "bridge-openems"
+    prefix = Column(Text, nullable=False)  # first characters of the key, to recognise it in a list
+    key_hash = Column(Text, nullable=False, unique=True)  # hex SHA-256 of the whole key
+    scope = Column(Enum(ApiKeyScope, name="apikeyscope", values_callable=_values), nullable=False)
+    created_by_id = Column(Integer, ForeignKey("app_user.id"), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
 
 
 # A plain Table, not an ORM class: the ORM needs a primary key, and none fits
