@@ -10,11 +10,12 @@ moves forward, and only ingest callers may post.
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
+import database
 import routers.measurements
 from models import Metric, Site, measurement
-from routers.measurements import MAX_BATCH_SIZE, MAX_FUTURE_SKEW
+from routers.measurements import AGGREGATE_POLICY_START_OFFSET, MAX_BATCH_SIZE, MAX_FUTURE_SKEW
 from seed_metrics import load_metric_catalogue
 from test_auth import admin, make_key, viewer  # noqa: F401 — admin and viewer are fixtures
 from test_site_hierarchy import make_asset, make_portfolio, make_site
@@ -274,6 +275,71 @@ def test_last_seen_ignores_a_batch_of_duplicates(client, auth_headers, db_sessio
 
     assert response.json() == {"inserted": 0, "ignored": 1}
     assert last_seen(db_session, place["site"]) == T0
+
+
+# --- measurement_hourly ---
+
+def materialised_hours(site_id):
+    """The hours of measurement_hourly actually materialised for a site, not added in real time."""
+    with database.engine.connect() as conn:
+        table = conn.execute(text("""
+            SELECT format('%I.%I', materialization_hypertable_schema, materialization_hypertable_name)
+            FROM timescaledb_information.continuous_aggregates WHERE view_name = 'measurement_hourly'
+        """)).scalar_one()
+        # The materialisation table names its columns after the view's
+        return conn.execute(text(f"SELECT bucket, sample_count FROM {table} WHERE site_id = :site ORDER BY bucket"),
+                            {"site": site_id}).all()
+
+
+def test_policy_start_offset_is_the_one_of_the_migration(db_session):
+    start_offset = db_session.execute(text("""
+        SELECT (config->>'start_offset')::interval FROM timescaledb_information.jobs
+        WHERE hypertable_name = 'measurement_hourly' AND proc_name = 'policy_refresh_continuous_aggregate'
+    """)).scalar_one()
+
+    assert start_offset == AGGREGATE_POLICY_START_OFFSET
+
+
+def test_data_older_than_the_policy_reaches_the_hourly_aggregate(client, auth_headers, db_session, place):
+    now = datetime.now(timezone.utc)
+    old = (now - timedelta(days=10)).replace(minute=0, second=0, microsecond=0)
+    # Materialise a recent hour first: real-time aggregation then stops adding anything older
+    post(client, auth_headers, place["site"], [item(at=now - timedelta(days=1))])
+    with database.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.execute(text("CALL refresh_continuous_aggregate('measurement_hourly', NULL, now() - INTERVAL '1 hour')"))
+
+    response = post(client, auth_headers, place["site"], [
+        item(at=old, value=10.0), item(at=old + timedelta(minutes=59), value=30.0),
+        item(at=old + timedelta(hours=1), value=20.0),
+    ])
+
+    assert response.json() == {"inserted": 3, "ignored": 0}
+    assert materialised_hours(place["site"])[:2] == [(old, 2), (old + timedelta(hours=1), 1)]
+    hour = db_session.execute(text("""
+        SELECT avg_value, sample_count FROM measurement_hourly WHERE site_id = :site AND bucket = :bucket
+    """), {"site": place["site"], "bucket": old}).one()
+    assert hour == (20.0, 2)
+
+
+def test_recent_data_is_left_to_the_policy(client, auth_headers, place):
+    response = post(client, auth_headers, place["site"], [item(at=datetime.now(timezone.utc) - timedelta(hours=2))])
+
+    assert response.status_code == 200
+    assert materialised_hours(place["site"]) == []
+
+
+def test_a_failed_refresh_still_answers_what_was_stored(client, auth_headers, db_session, place, monkeypatch, caplog):
+    class Unreachable:
+        def connect(self):
+            raise OSError("database unreachable")
+
+    monkeypatch.setattr(routers.measurements, "engine", Unreachable())
+
+    response = post(client, auth_headers, place["site"], [item(at=datetime.now(timezone.utc) - timedelta(days=10))])
+
+    assert response.json() == {"inserted": 1, "ignored": 0}
+    assert len(stored_rows(db_session)) == 1
+    assert "measurement_hourly not refreshed" in caplog.text
 
 
 # --- Who may post ---

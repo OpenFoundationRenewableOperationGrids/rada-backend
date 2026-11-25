@@ -9,25 +9,28 @@ all post this same shape.
 A batch is all or nothing: every item is checked before anything is written,
 and a 422 lists every invalid item. A value already stored (same time, site,
 asset and metric) is ignored, not an error. A post moves the site's
-last_seen_at forward, never back.
+last_seen_at forward, never back. Rows too old for the hourly aggregate's
+refresh policy are materialised into measurement_hourly by the post itself.
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from auth.deps import require_ingest
-from database import get_db
+from database import engine, get_db
 from models import Asset, Metric, MetricLevel, Site, measurement
 from routers.errors import field_error, unprocessable
 
 router = APIRouter(tags=["Measurements"])
+log = logging.getLogger("rada.measurements")
 
 # One batch is one INSERT: 6 bind parameters per row, well under PostgreSQL's 65,535
 MAX_BATCH_SIZE = 5000
@@ -36,6 +39,10 @@ MAX_FUTURE_SKEW = timedelta(minutes=5)
 # The rules the database enforces as well, should a row get past the checks below
 # (an asset moved to another site between the check and the insert, for example)
 SAFETY_NET_CONSTRAINTS = {"ck_metric_level", "fk_measurement_asset_site"}
+# start_offset of measurement_hourly's refresh policy (revision 0004): the policy
+# refreshes the last 3 days by itself, older rows are refreshed here.
+# tests/test_measurements_api.py checks that the two agree.
+AGGREGATE_POLICY_START_OFFSET = timedelta(days=3)
 
 
 # --- Schemas ---
@@ -102,6 +109,33 @@ def item_errors(db: Session, site_id: int, items: list[MeasurementIn], metrics: 
     return errors
 
 
+# --- Hourly aggregate ---
+
+def refresh_hourly_aggregate(stored_times: list[datetime]) -> None:
+    """Materialise the hours of stored rows that the refresh policy no longer reaches.
+
+    Without this, rows older than the policy's window would never reach
+    measurement_hourly: real-time aggregation only adds rows newer than what is
+    already materialised. Runs after the commit, on its own connection, because
+    refresh_continuous_aggregate() cannot run inside a transaction.
+    """
+    cutoff = datetime.now(timezone.utc) - AGGREGATE_POLICY_START_OFFSET
+    old_times = [time for time in stored_times if time < cutoff]
+    if not old_times:
+        return
+    start = min(old_times).replace(minute=0, second=0, microsecond=0)
+    # The end of the newest row's hour: a refresh covers only whole hours inside its window
+    end = max(old_times).replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text("CALL refresh_continuous_aggregate('measurement_hourly', "
+                              "CAST(:start AS timestamptz), CAST(:end AS timestamptz))"),
+                         {"start": start, "end": end})
+    except Exception:
+        # The rows are stored and the answer says so; the refresh can be run again by hand
+        log.exception("measurement_hourly not refreshed from %s to %s", start.isoformat(), end.isoformat())
+
+
 # --- Route ---
 
 @router.post(
@@ -112,7 +146,8 @@ def item_errors(db: Session, site_id: int, items: list[MeasurementIn], metrics: 
                 "its asset must be on this site, and the metric's level must allow the asset to be filled in "
                 "(`asset`, `both`) or empty (`site`, `both`). Times need a time zone and may be at most "
                 f"{MAX_FUTURE_SKEW} in the future. An item already stored is ignored and counted in `ignored`. "
-                "The site's `last_seen_at` moves forward to the latest time stored.",
+                "The site's `last_seen_at` moves forward to the latest time stored. Rows older than "
+                f"{AGGREGATE_POLICY_START_OFFSET.days} days are added to `measurement_hourly` before the answer.",
     responses={
         404: {"description": "Site not found"},
         422: {"description": "Invalid batch; `loc` gives the index of each invalid item. Nothing was stored"},
@@ -154,4 +189,5 @@ def post_measurements(
             raise
         raise unprocessable([field_error(("body", "items"), "rejected_by_database",
                                          f"Nothing was stored: {error.orig.diag.message_primary}")])
+    refresh_hourly_aggregate(stored_times)
     return {"inserted": len(stored_times), "ignored": len(rows) - len(stored_times)}
