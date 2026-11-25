@@ -5,8 +5,9 @@ Turns OpenEMS channel values into the payload of RADA's existing endpoint
 POST /assets/{asset_id}/telemetry. Python computes: every number posted is
 worked out here, from the channels, with no guesswork.
 
-Temporary until BE-03/BE-05: the generic /measurements endpoint will take
-the raw channels (W, Wh, %) instead, and this file will shrink to a mapping.
+Temporary until BE-05: the generic endpoint POST /sites/{site_id}/measurements
+now exists (BE-03) and takes the raw channels (W, Wh, %) as metric keys. BE-05
+switches the bridge to it, and this file will shrink to a mapping.
 
 Units: OpenEMS reports W, Wh and %. The current API takes MW and MWh, with
 the same sign convention as OpenEMS for the battery (negative = charging,

@@ -56,10 +56,12 @@ def test_objects_alembic_check_cannot_see_are_all_there():
             WHERE n.nspname = 'public' AND c.contype IN ('c', 'x')
         """)).scalars())
         # TimescaleDB adds triggers of its own (metadata_insert_trigger): their
-        # functions belong to the extension
+        # functions belong to the extension. It also copies measurement's triggers
+        # onto each chunk, in _timescaledb_internal: only public tables count.
         triggers = {tuple(row) for row in conn.execute(text("""
             SELECT t.tgrelid::regclass::text, t.tgname FROM pg_trigger t
-            WHERE NOT t.tgisinternal
+            JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE NOT t.tgisinternal AND n.nspname = 'public'
               AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = t.tgfoid AND d.deptype = 'e')
         """))}
         # Functions of extensions (timescaledb, btree_gist) also live in public: leave them out

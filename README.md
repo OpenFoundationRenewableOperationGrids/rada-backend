@@ -150,6 +150,8 @@ This means the LLM **narrates results from live data rather than guessing from t
 rada-backend/
 │
 ├── main.py                 # FastAPI app — routes, CORS, API key auth (verify_api_key), lifespan
+├── routers/                # V1.0 routes, one module per part of the API: catalogue.py
+│                           #   (/languages, /metrics), measurements.py (ingestion), errors.py
 ├── database.py             # PostgreSQL/TimescaleDB engine, SessionLocal, Base, get_db()
 │                           #   — sets UTC timezone on every connection
 ├── models.py               # All SQLAlchemy ORM models
@@ -293,6 +295,12 @@ erDiagram
 | `GET` | `/assets/summary` | Yes | Fleet-wide totals, broken down by asset type |
 | `GET` | `/assets/{asset_id}/soc` | Yes | Single asset — latest record (`mode=S`) or history (`mode=D`) |
 | `POST` | `/llm/ask?question=...` | Yes | Streams an LLM answer using live battery data from the DB (503 if vLLM is unreachable) |
+| `GET` | `/languages` | Read | Active languages, default first |
+| `GET` | `/metrics` | Read | Metric catalogue with every translation, or one language with `?lang=` |
+| `POST` | `/metrics` | Admin | Create a custom metric with its names |
+| `POST` | `/sites/{site_id}/measurements` | Ingest | Post a batch of measurements (metric keys, W/Wh/var/%) |
+
+"Read", "Admin" and "Ingest" are the `require_read`, `require_admin` and `require_ingest` dependencies of [docs/AUTH.md](docs/AUTH.md) §1. The V1.0 routes live in [`routers/`](routers); [docs/DATA_MODEL.md](docs/DATA_MODEL.md) §8 describes them.
 
 > **Route ordering matters:** `/assets/summary` must be declared **before** `/assets/{asset_id}` in `main.py`, otherwise FastAPI matches `summary` as a path parameter and the summary endpoint becomes unreachable.
 
@@ -397,6 +405,71 @@ bucket_minutes = ceil((delta_days * 24 * 60) / limit)
 This keeps chart responses fast and bounded (max 250 points) while allowing drill-down to raw readings for short windows.
 
 Returns `404` if the asset does not exist or has no records. Returns `400` if `mode` is not `S` or `D`, or if a timestamp parameter is not valid ISO format.
+
+---
+
+### Metric catalogue: `GET /languages`, `GET /metrics`, `POST /metrics`
+
+```bash
+curl -H "X-API-Key: $API_KEY" "http://127.0.0.1:8000/metrics?lang=fr"
+```
+
+```json
+[{"id": 4, "key": "battery_power", "unit": "W", "kind": "instantaneous", "level": "both",
+  "category": "core", "is_active": true, "language": "fr",
+  "name": "Puissance batterie", "sign_note": "Positif = décharge, négatif = charge"}]
+```
+
+- Without `lang`, each metric has `translations` (`{"en": {"name", "sign_note"}, "fr": …}`) instead of `language`, `name` and `sign_note`.
+- With `lang`, a metric with no name in that language falls back to the default language, and `language` says which was used.
+- An unknown or inactive `lang` is a `422`.
+
+`POST /metrics` (administrator) creates a **custom** metric:
+
+```json
+{"key": "inverter_temperature", "unit": "°C", "kind": "instantaneous", "level": "asset",
+ "translations": {"en": {"name": "Inverter temperature"}, "fr": {"name": "Température onduleur"}}}
+```
+
+- A name in the default language is required.
+- It returns `201` with the metric in the `GET /metrics` shape.
+- `409` if the key exists, whatever its category.
+- `422` for an invalid field or an unknown language. A `category` in the body is refused: core and optional metrics come only from `seeds/metrics.toml`.
+
+---
+
+### `POST /sites/{site_id}/measurements`
+
+```bash
+curl -X POST -H "X-API-Key: $INGEST_KEY" -H "Content-Type: application/json" \
+  "http://127.0.0.1:8000/sites/1/measurements" -d '{
+    "source": "bridge-openems",
+    "items": [
+      {"time": "2026-11-25T10:00:00Z", "metric": "grid_power",    "asset_id": null, "value": 1520.0},
+      {"time": "2026-11-25T10:00:00Z", "metric": "battery_power", "asset_id": 49,   "value": -800.0}
+    ]}'
+```
+
+```json
+{"inserted": 2, "ignored": 0}
+```
+
+- `source` is required, and is one of `bridge-openems`, `simulator`, `seed`, `csv`.
+- A batch holds 1 to `MAX_BATCH_SIZE` (5000) items, and is stored **all or nothing**.
+- `time` needs a time zone and is stored in UTC. It may be at most `MAX_FUTURE_SKEW` (5 minutes) in the future, and not before `EARLIEST_TIME` (2000-01-01T00:00:00Z).
+- `value` is in the metric's unit, and must be finite.
+- `asset_id` is `null` for a site-wide value.
+- A value already stored (same time, site, asset and metric) is ignored and counted in `ignored`.
+- For `bridge-openems` and `simulator` batches, the site's `last_seen_at` moves forward to the latest time stored. `seed` and `csv` batches leave it unchanged.
+- Rows older than `POLICY_REACH` (2 days 22 h 30 min: the 3 days of `measurement_hourly`'s refresh policy, less its 30-minute interval and one hour) are added to the hourly aggregate before the answer.
+- `404` for an unknown site, `409` for an inactive one.
+- `422` lists every invalid item, with its index in `loc`, for example `["body", "items", 3, "metric"]`. The reasons are:
+  - unknown or inactive metric;
+  - asset not on this site, or inactive;
+  - the metric's level (a `site` metric with an asset, an `asset` metric without one);
+  - a time in the future, or before 2000.
+
+These limits are constants in `routers/measurements.py`, not environment variables.
 
 ---
 

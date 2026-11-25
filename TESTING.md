@@ -30,6 +30,9 @@ tests/
   test_metric_catalogue.py # chargeur seed_metrics.py : idempotent, refus des changements d'unit/kind/level
   test_metric_rules.py   # règle de niveau (triggers), tarifs sans chevauchement, immobilisations
   test_measurement.py    # hypertable measurement, doublons ignorés, agrégat horaire, downgrade de 0004
+  test_catalogue_api.py  # GET /languages, GET /metrics (?lang=, repli sur la langue par défaut), POST /metrics
+  test_measurements_api.py # POST /sites/{site_id}/measurements : contrôles par élément, tout ou rien, doublons,
+                         #   last_seen_at, filet de sécurité du trigger, droits d'accès
   test_seed_reset.py     # --reset vide toute table qui pointe vers les données de démo
   test_auth.py           # BE-04 : premier admin, connexion cookie/jeton, déconnexion, règles de mot de passe,
                          #   ralentissement, rôles admin/lecteur, clés API (portées, révocation), API_KEY héritée
