@@ -43,10 +43,14 @@ EARLIEST_TIME = datetime(2000, 1, 1, tzinfo=timezone.utc)
 # The rules the database enforces as well, should a row get past the checks below
 # (an asset moved to another site between the check and the insert, for example)
 SAFETY_NET_CONSTRAINTS = {"ck_metric_level", "fk_measurement_asset_site"}
-# start_offset of measurement_hourly's refresh policy (revision 0004): the policy
-# refreshes the last 3 days by itself, older rows are refreshed here.
-# tests/test_measurements_api.py checks that the two agree.
+# start_offset and schedule_interval of measurement_hourly's refresh policy (revision
+# 0004). tests/test_measurements_api.py checks that they agree with the migration.
 AGGREGATE_POLICY_START_OFFSET = timedelta(days=3)
+AGGREGATE_POLICY_SCHEDULE_INTERVAL = timedelta(minutes=30)
+# The age up to which the policy is sure to pick a row up. A row inside its window now
+# can be outside it by the next run, one schedule interval later, and a run leaves out
+# an hour its window only partly covers. Older rows are refreshed here.
+POLICY_REACH = AGGREGATE_POLICY_START_OFFSET - AGGREGATE_POLICY_SCHEDULE_INTERVAL - timedelta(hours=1)
 # Sources reporting what a site sends now: only they move its last_seen_at. A seed or
 # a CSV import writes history, which says nothing about whether the site is online.
 LIVE_SOURCES = {"bridge-openems", "simulator"}
@@ -136,7 +140,7 @@ def refresh_hourly_aggregate(stored_times: list[datetime]) -> None:
     already materialised. Runs after the commit, on its own connection, because
     refresh_continuous_aggregate() cannot run inside a transaction.
     """
-    cutoff = datetime.now(timezone.utc) - AGGREGATE_POLICY_START_OFFSET
+    cutoff = datetime.now(timezone.utc) - POLICY_REACH
     old_times = [time for time in stored_times if time < cutoff]
     if not old_times:
         return
@@ -165,8 +169,8 @@ def refresh_hourly_aggregate(stored_times: list[datetime]) -> None:
                 f"a time zone, may be at most {MAX_FUTURE_SKEW} in the future, and may not be before "
                 f"{EARLIEST_TIME.date()}. An item already stored is ignored and counted in `ignored`. "
                 "For a live source (`bridge-openems`, `simulator`), the site's `last_seen_at` moves forward to "
-                "the latest time stored. Rows older than "
-                f"{AGGREGATE_POLICY_START_OFFSET.days} days are added to `measurement_hourly` before the answer.",
+                f"the latest time stored. Rows older than {POLICY_REACH} are added to `measurement_hourly` "
+                "before the answer.",
     responses={
         404: {"description": "Site not found"},
         409: {"description": "Site inactive"},

@@ -461,7 +461,7 @@ curl -X POST -H "X-API-Key: $INGEST_KEY" -H "Content-Type: application/json" \
 - `asset_id` is `null` for a site-wide value.
 - A value already stored (same time, site, asset and metric) is ignored and counted in `ignored`.
 - For `bridge-openems` and `simulator` batches, the site's `last_seen_at` moves forward to the latest time stored. `seed` and `csv` batches leave it unchanged.
-- Rows older than `AGGREGATE_POLICY_START_OFFSET` (3 days, the refresh policy of `measurement_hourly`) are added to the hourly aggregate before the answer.
+- Rows older than `POLICY_REACH` (2 days 22 h 30 min: the 3 days of `measurement_hourly`'s refresh policy, less its 30-minute interval and one hour) are added to the hourly aggregate before the answer.
 - `404` for an unknown site, `409` for an inactive one.
 - `422` lists every invalid item, with its index in `loc`, for example `["body", "items", 3, "metric"]`. The reasons are:
   - unknown or inactive metric;

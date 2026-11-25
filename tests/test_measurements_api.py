@@ -15,7 +15,14 @@ from sqlalchemy import select, text
 import database
 import routers.measurements
 from models import Asset, Metric, Site, measurement
-from routers.measurements import AGGREGATE_POLICY_START_OFFSET, EARLIEST_TIME, MAX_BATCH_SIZE, MAX_FUTURE_SKEW
+from routers.measurements import (
+    AGGREGATE_POLICY_SCHEDULE_INTERVAL,
+    AGGREGATE_POLICY_START_OFFSET,
+    EARLIEST_TIME,
+    MAX_BATCH_SIZE,
+    MAX_FUTURE_SKEW,
+    POLICY_REACH,
+)
 from seed_metrics import load_metric_catalogue
 from test_auth import admin, make_key, viewer  # noqa: F401 — admin and viewer are fixtures
 from test_site_hierarchy import make_asset, make_portfolio, make_site
@@ -338,13 +345,13 @@ def materialised_hours(site_id):
                             {"site": site_id}).all()
 
 
-def test_policy_start_offset_is_the_one_of_the_migration(db_session):
-    start_offset = db_session.execute(text("""
-        SELECT (config->>'start_offset')::interval FROM timescaledb_information.jobs
+def test_policy_constants_are_the_ones_of_the_migration(db_session):
+    policy = db_session.execute(text("""
+        SELECT (config->>'start_offset')::interval, schedule_interval FROM timescaledb_information.jobs
         WHERE hypertable_name = 'measurement_hourly' AND proc_name = 'policy_refresh_continuous_aggregate'
-    """)).scalar_one()
+    """)).one()
 
-    assert start_offset == AGGREGATE_POLICY_START_OFFSET
+    assert tuple(policy) == (AGGREGATE_POLICY_START_OFFSET, AGGREGATE_POLICY_SCHEDULE_INTERVAL)
 
 
 def test_data_older_than_the_policy_reaches_the_hourly_aggregate(client, auth_headers, db_session, place):
@@ -368,8 +375,19 @@ def test_data_older_than_the_policy_reaches_the_hourly_aggregate(client, auth_he
     assert hour == (20.0, 2)
 
 
+def test_data_just_inside_the_policy_window_reaches_the_hourly_aggregate(client, auth_headers, place):
+    # Inside the window now, but maybe not at the next run: refreshed by the post
+    at = datetime.now(timezone.utc) - AGGREGATE_POLICY_START_OFFSET + timedelta(minutes=5)
+
+    post(client, auth_headers, place["site"], [item(at=at)])
+
+    assert materialised_hours(place["site"]) == [(at.replace(minute=0, second=0, microsecond=0), 1)]
+
+
 def test_recent_data_is_left_to_the_policy(client, auth_headers, place):
-    response = post(client, auth_headers, place["site"], [item(at=datetime.now(timezone.utc) - timedelta(hours=2))])
+    at = datetime.now(timezone.utc) - POLICY_REACH + timedelta(minutes=5)
+
+    response = post(client, auth_headers, place["site"], [item(at=at)])
 
     assert response.status_code == 200
     assert materialised_hours(place["site"]) == []
