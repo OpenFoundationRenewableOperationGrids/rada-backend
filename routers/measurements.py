@@ -81,7 +81,11 @@ class MeasurementResult(BaseModel):
 def item_errors(db: Session, site_id: int, items: list[MeasurementIn], metrics: dict[str, Metric]) -> list[dict]:
     """Every reason an item cannot be stored, as 422 entries. Empty when the batch is valid."""
     asset_ids = {item.asset_id for item in items if item.asset_id is not None}
-    assets_on_site = set(db.scalars(select(Asset.id).where(Asset.site_id == site_id, Asset.id.in_(asset_ids))))
+    # Asset id -> is_active, for the assets of the batch that are on this site
+    assets_on_site = {
+        asset_id: is_active for asset_id, is_active in
+        db.execute(select(Asset.id, Asset.is_active).where(Asset.site_id == site_id, Asset.id.in_(asset_ids)))
+    }
     latest_allowed = datetime.now(timezone.utc) + MAX_FUTURE_SKEW
 
     errors = []
@@ -103,6 +107,9 @@ def item_errors(db: Session, site_id: int, items: list[MeasurementIn], metrics: 
         if item.asset_id is not None and item.asset_id not in assets_on_site:
             errors.append(field_error(loc + ("asset_id",), "asset_not_on_site",
                                       f"Asset {item.asset_id} is not on site {site_id}", item.asset_id))
+        elif item.asset_id is not None and not assets_on_site[item.asset_id]:
+            errors.append(field_error(loc + ("asset_id",), "inactive_asset",
+                                      f"Asset {item.asset_id} is inactive", item.asset_id))
         if item.time > latest_allowed:
             errors.append(field_error(loc + ("time",), "time_in_future",
                                       f"More than {MAX_FUTURE_SKEW} in the future", item.time))
@@ -142,14 +149,15 @@ def refresh_hourly_aggregate(stored_times: list[datetime]) -> None:
     "/sites/{site_id}/measurements", response_model=MeasurementResult,
     dependencies=[Depends(require_ingest)],
     summary="Post a batch of measurements",
-    description=f"Up to {MAX_BATCH_SIZE} items, all stored or none. Each item's metric must exist and be active, "
-                "its asset must be on this site, and the metric's level must allow the asset to be filled in "
+    description=f"Up to {MAX_BATCH_SIZE} items, all stored or none, for an active site. Each item's metric must "
+                "exist and be active, its asset must be on this site and active, and the metric's level must allow the asset to be filled in "
                 "(`asset`, `both`) or empty (`site`, `both`). Times need a time zone and may be at most "
                 f"{MAX_FUTURE_SKEW} in the future. An item already stored is ignored and counted in `ignored`. "
                 "The site's `last_seen_at` moves forward to the latest time stored. Rows older than "
                 f"{AGGREGATE_POLICY_START_OFFSET.days} days are added to `measurement_hourly` before the answer.",
     responses={
         404: {"description": "Site not found"},
+        409: {"description": "Site inactive"},
         422: {"description": "Invalid batch; `loc` gives the index of each invalid item. Nothing was stored"},
     },
 )
@@ -158,8 +166,11 @@ def post_measurements(
     site_id: int = Path(..., description="Id of the site the measurements belong to.", examples=[1]),
     db: Session = Depends(get_db),
 ):
-    if db.get(Site, site_id) is None:
+    site = db.get(Site, site_id)
+    if site is None:
         raise HTTPException(status_code=404, detail=f"Site {site_id} not found")
+    if not site.is_active:
+        raise HTTPException(status_code=409, detail=f"Site {site_id} is inactive")
     keys = {item.metric for item in body.items}
     metrics = {metric.key: metric for metric in db.query(Metric).filter(Metric.key.in_(keys))}
     errors = item_errors(db, site_id, body.items, metrics)

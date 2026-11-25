@@ -443,10 +443,10 @@ The routes are in `routers/` (`catalogue.py`, `measurements.py`). Who may call t
   - `value` is in the metric's unit, and must be finite.
 - The API checks, item by item and before writing anything:
   - that the metric exists and is active;
-  - that the asset belongs to the site;
+  - that the asset belongs to the site and is active (`inactive_asset` otherwise);
   - that the metric's level allows the asset to be filled in or empty (§3.1);
   - and the time.
-  A 422 lists every invalid item in FastAPI's format, with its index: `{"detail": [{"type": "unknown_metric", "loc": ["body", "items", 3, "metric"], "msg": "…", "input": "…"}]}`. The trigger and the foreign key of §4 stay as a safety net. If one fires anyway, the batch is still a 422 and nothing is stored. An unknown site is a 404.
+  A 422 lists every invalid item in FastAPI's format, with its index: `{"detail": [{"type": "unknown_metric", "loc": ["body", "items", 3, "metric"], "msg": "…", "input": "…"}]}`. The trigger and the foreign key of §4 stay as a safety net. If one fires anyway, the batch is still a 422 and nothing is stored. An unknown site is a 404, an inactive site a 409.
 - A duplicate (same time, site, asset and metric) is ignored, not an error. The answer is `{"inserted": n, "ignored": n}`.
 - The site's `last_seen_at` moves to the latest time stored, in the same transaction. It never moves back, and a batch of duplicates leaves it unchanged.
 - Rows older than 3 days are added to `measurement_hourly` before the answer (§4). If that refresh fails, the rows stay stored, the answer is unchanged and the error is logged.
@@ -808,10 +808,10 @@ Les routes sont dans `routers/` (`catalogue.py`, `measurements.py`). Qui peut le
   - `value` est dans l'unité de la métrique, et doit être finie.
 - L'API vérifie, élément par élément et avant toute écriture :
   - que la métrique existe et est active ;
-  - que l'actif appartient au site ;
+  - que l'actif appartient au site et est actif (`inactive_asset` sinon) ;
   - que le niveau de la métrique autorise un actif renseigné ou vide (§3.1) ;
   - et l'horodatage.
-  Une 422 liste chaque élément invalide au format de FastAPI, avec son indice : `{"detail": [{"type": "unknown_metric", "loc": ["body", "items", 3, "metric"], "msg": "…", "input": "…"}]}`. Le trigger et la clé étrangère du §4 restent un filet de sécurité. Si l'un d'eux se déclenche malgré tout, le lot est quand même une 422 et rien n'est enregistré. Un site inconnu donne une 404.
+  Une 422 liste chaque élément invalide au format de FastAPI, avec son indice : `{"detail": [{"type": "unknown_metric", "loc": ["body", "items", 3, "metric"], "msg": "…", "input": "…"}]}`. Le trigger et la clé étrangère du §4 restent un filet de sécurité. Si l'un d'eux se déclenche malgré tout, le lot est quand même une 422 et rien n'est enregistré. Un site inconnu donne une 404, un site inactif une 409.
 - Un doublon (même instant, site, actif et métrique) est ignoré, sans erreur. La réponse est `{"inserted": n, "ignored": n}`.
 - Le `last_seen_at` du site passe au dernier instant enregistré, dans la même transaction. Il ne recule jamais, et un lot fait uniquement de doublons le laisse inchangé.
 - Les lignes de plus de 3 jours sont ajoutées à `measurement_hourly` avant la réponse (§4). Si ce rafraîchissement échoue, les lignes restent enregistrées, la réponse est inchangée et l'erreur est journalisée.

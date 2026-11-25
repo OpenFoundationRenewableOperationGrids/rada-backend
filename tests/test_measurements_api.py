@@ -14,7 +14,7 @@ from sqlalchemy import select, text
 
 import database
 import routers.measurements
-from models import Metric, Site, measurement
+from models import Asset, Metric, Site, measurement
 from routers.measurements import AGGREGATE_POLICY_START_OFFSET, MAX_BATCH_SIZE, MAX_FUTURE_SKEW
 from seed_metrics import load_metric_catalogue
 from test_auth import admin, make_key, viewer  # noqa: F401 — admin and viewer are fixtures
@@ -155,6 +155,16 @@ def test_asset_not_on_this_site_is_refused(client, auth_headers, place, asset):
     assert errors_of(response) == [(("body", "items", 0, "asset_id"), "asset_not_on_site")]
 
 
+def test_inactive_asset_is_refused(client, auth_headers, db_session, place):
+    db_session.query(Asset).filter(Asset.id == place["asset"]).update({"is_active": False})
+    db_session.commit()
+
+    response = post(client, auth_headers, place["site"], [item(), item("battery_power", asset_id=place["asset"])])
+
+    assert errors_of(response) == [(("body", "items", 1, "asset_id"), "inactive_asset")]
+    assert stored_rows(db_session) == []
+
+
 def test_site_level_metric_with_an_asset_is_refused(client, auth_headers, place):
     response = post(client, auth_headers, place["site"], [item("consumption_power", asset_id=place["asset"])])
 
@@ -231,6 +241,18 @@ def test_unknown_site_is_404(client, auth_headers, place):
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Site 999999 not found"}
+
+
+def test_inactive_site_is_409(client, auth_headers, db_session, place):
+    db_session.query(Site).filter(Site.id == place["site"]).update({"is_active": False})
+    db_session.commit()
+
+    response = post(client, auth_headers, place["site"], [item()])
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": f"Site {place['site']} is inactive"}
+    assert stored_rows(db_session) == []
+    assert last_seen(db_session, place["site"]) is None
 
 
 @pytest.mark.parametrize(("metric", "asset"), [("consumption_power", "asset"), ("battery_power", "other_asset")])

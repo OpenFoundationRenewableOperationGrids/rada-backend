@@ -462,10 +462,10 @@ curl -X POST -H "X-API-Key: $INGEST_KEY" -H "Content-Type: application/json" \
 - A value already stored (same time, site, asset and metric) is ignored and counted in `ignored`.
 - The site's `last_seen_at` moves forward to the latest time stored.
 - Rows older than `AGGREGATE_POLICY_START_OFFSET` (3 days, the refresh policy of `measurement_hourly`) are added to the hourly aggregate before the answer.
-- `404` for an unknown site.
+- `404` for an unknown site, `409` for an inactive one.
 - `422` lists every invalid item, with its index in `loc`, for example `["body", "items", 3, "metric"]`. The reasons are:
   - unknown or inactive metric;
-  - asset not on this site;
+  - asset not on this site, or inactive;
   - the metric's level (a `site` metric with an asset, an `asset` metric without one);
   - a time in the future.
 
