@@ -287,6 +287,21 @@ def test_last_seen_does_not_move_back_for_older_data(client, auth_headers, db_se
     assert last_seen(db_session, place["site"]) == T0
 
 
+@pytest.mark.parametrize("source", ["simulator", "bridge-openems"])
+def test_last_seen_moves_for_a_live_source(client, auth_headers, db_session, place, source):
+    post(client, auth_headers, place["site"], [item(at=T0)], source=source)
+
+    assert last_seen(db_session, place["site"]) == T0
+
+
+@pytest.mark.parametrize("source", ["csv", "seed"])
+def test_last_seen_does_not_move_for_history(client, auth_headers, db_session, place, source):
+    response = post(client, auth_headers, place["site"], [item(at=T0)], source=source)
+
+    assert response.json() == {"inserted": 1, "ignored": 0}
+    assert last_seen(db_session, place["site"]) is None
+
+
 def test_last_seen_ignores_a_batch_of_duplicates(client, auth_headers, db_session, place):
     post(client, auth_headers, place["site"], [item(at=T0 + timedelta(minutes=1))])
     # Set it back by hand, so that any update from the duplicate below would show

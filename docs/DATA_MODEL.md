@@ -448,7 +448,7 @@ The routes are in `routers/` (`catalogue.py`, `measurements.py`). Who may call t
   - and the time.
   A 422 lists every invalid item in FastAPI's format, with its index: `{"detail": [{"type": "unknown_metric", "loc": ["body", "items", 3, "metric"], "msg": "…", "input": "…"}]}`. The trigger and the foreign key of §4 stay as a safety net. If one fires anyway, the batch is still a 422 and nothing is stored. An unknown site is a 404, an inactive site a 409.
 - A duplicate (same time, site, asset and metric) is ignored, not an error. The answer is `{"inserted": n, "ignored": n}`.
-- The site's `last_seen_at` moves to the latest time stored, in the same transaction. It never moves back, and a batch of duplicates leaves it unchanged.
+- For a live source (`bridge-openems`, `simulator`), the site's `last_seen_at` moves to the latest time stored, in the same transaction. It never moves back, and a batch of duplicates leaves it unchanged. A `seed` or `csv` batch writes history and leaves it unchanged: it says nothing about whether the site is online.
 - Rows older than 3 days are added to `measurement_hourly` before the answer (§4). If that refresh fails, the rows stay stored, the answer is unchanged and the error is logged.
 - **`GET /metrics`** (`require_read`) lists the catalogue, inactive metrics included, with `key`, `unit`, `kind`, `level`, `category` and `is_active`.
   - Without `lang`, each metric has `translations`: its names in every active language.
@@ -813,7 +813,7 @@ Les routes sont dans `routers/` (`catalogue.py`, `measurements.py`). Qui peut le
   - et l'horodatage.
   Une 422 liste chaque élément invalide au format de FastAPI, avec son indice : `{"detail": [{"type": "unknown_metric", "loc": ["body", "items", 3, "metric"], "msg": "…", "input": "…"}]}`. Le trigger et la clé étrangère du §4 restent un filet de sécurité. Si l'un d'eux se déclenche malgré tout, le lot est quand même une 422 et rien n'est enregistré. Un site inconnu donne une 404, un site inactif une 409.
 - Un doublon (même instant, site, actif et métrique) est ignoré, sans erreur. La réponse est `{"inserted": n, "ignored": n}`.
-- Le `last_seen_at` du site passe au dernier instant enregistré, dans la même transaction. Il ne recule jamais, et un lot fait uniquement de doublons le laisse inchangé.
+- Pour une source en direct (`bridge-openems`, `simulator`), le `last_seen_at` du site passe au dernier instant enregistré, dans la même transaction. Il ne recule jamais, et un lot fait uniquement de doublons le laisse inchangé. Un lot `seed` ou `csv` écrit de l'historique et le laisse inchangé : il ne dit rien de la connexion du site.
 - Les lignes de plus de 3 jours sont ajoutées à `measurement_hourly` avant la réponse (§4). Si ce rafraîchissement échoue, les lignes restent enregistrées, la réponse est inchangée et l'erreur est journalisée.
 - **`GET /metrics`** (`require_read`) liste le catalogue, métriques inactives comprises, avec `key`, `unit`, `kind`, `level`, `category` et `is_active`.
   - Sans `lang`, chaque métrique porte `translations` : ses noms dans toutes les langues actives.

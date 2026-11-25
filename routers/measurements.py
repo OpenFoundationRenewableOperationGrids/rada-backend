@@ -8,9 +8,10 @@ all post this same shape.
 
 A batch is all or nothing: every item is checked before anything is written,
 and a 422 lists every invalid item. A value already stored (same time, site,
-asset and metric) is ignored, not an error. A post moves the site's
-last_seen_at forward, never back. Rows too old for the hourly aggregate's
-refresh policy are materialised into measurement_hourly by the post itself.
+asset and metric) is ignored, not an error. A post from a live source moves
+the site's last_seen_at forward, never back. Rows too old for the hourly
+aggregate's refresh policy are materialised into measurement_hourly by the
+post itself.
 """
 
 import logging
@@ -43,6 +44,9 @@ SAFETY_NET_CONSTRAINTS = {"ck_metric_level", "fk_measurement_asset_site"}
 # refreshes the last 3 days by itself, older rows are refreshed here.
 # tests/test_measurements_api.py checks that the two agree.
 AGGREGATE_POLICY_START_OFFSET = timedelta(days=3)
+# Sources reporting what a site sends now: only they move its last_seen_at. A seed or
+# a CSV import writes history, which says nothing about whether the site is online.
+LIVE_SOURCES = {"bridge-openems", "simulator"}
 
 
 # --- Schemas ---
@@ -153,7 +157,8 @@ def refresh_hourly_aggregate(stored_times: list[datetime]) -> None:
                 "exist and be active, its asset must be on this site and active, and the metric's level must allow the asset to be filled in "
                 "(`asset`, `both`) or empty (`site`, `both`). Times need a time zone and may be at most "
                 f"{MAX_FUTURE_SKEW} in the future. An item already stored is ignored and counted in `ignored`. "
-                "The site's `last_seen_at` moves forward to the latest time stored. Rows older than "
+                "For a live source (`bridge-openems`, `simulator`), the site's `last_seen_at` moves forward to "
+                "the latest time stored. Rows older than "
                 f"{AGGREGATE_POLICY_START_OFFSET.days} days are added to `measurement_hourly` before the answer.",
     responses={
         404: {"description": "Site not found"},
@@ -186,7 +191,7 @@ def post_measurements(
     try:
         # RETURNING lists only the rows stored, not the duplicates ignored
         stored_times = db.execute(statement).scalars().all()
-        if stored_times:
+        if stored_times and body.source in LIVE_SOURCES:
             # GREATEST skips a NULL, and never moves last_seen_at back for late data
             db.execute(
                 update(Site).where(Site.id == site_id)
