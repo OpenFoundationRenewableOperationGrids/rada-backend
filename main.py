@@ -29,6 +29,7 @@ from database import get_db
 from models import Asset, AssetType, StateOfCharge, GridConnectionStatus, AssetStatus
 from llm_service import ask_grid_question_stream
 from mvp_sites import site_for_new_asset
+from routers import catalogue
 from telemetry_simulator import run as run_simulator
 
 RADA_BANNER = """
@@ -90,6 +91,8 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(api_keys_router)
+# V1.0 routes live in router modules; the MVP routes below stay here for now (SPEC.md §7)
+app.include_router(catalogue.router)
 
 
 # --- Pydantic schemas ---
