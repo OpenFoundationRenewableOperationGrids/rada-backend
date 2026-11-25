@@ -8,6 +8,7 @@ who may call them.
 
 import pytest
 
+import routers.catalogue
 from models import Language, Metric, MetricCategory, MetricTranslation
 from seed_metrics import load_metric_catalogue
 from test_auth import admin, make_key, viewer  # noqa: F401 — admin and viewer are fixtures
@@ -162,6 +163,19 @@ def test_create_metric_refuses_an_existing_key(client, auth_headers, catalogue, 
 
     assert response.status_code == 409
     assert key in response.json()["detail"]
+
+
+def test_create_metric_is_409_when_the_key_appears_after_the_check(client, auth_headers, catalogue, db_session,
+                                                                  monkeypatch):
+    """A concurrent POST can insert the key between the pre-check and the commit: the unique key answers."""
+    client.post("/metrics", json=CUSTOM_METRIC, headers=auth_headers)
+    monkeypatch.setattr(routers.catalogue, "key_exists", lambda *args: False)
+
+    response = client.post("/metrics", json=CUSTOM_METRIC, headers=auth_headers)
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "A metric with key inverter_temperature already exists"}
+    assert db_session.query(Metric).filter(Metric.key == "inverter_temperature").count() == 1
 
 
 def test_create_metric_needs_a_name_in_the_default_language(client, auth_headers, catalogue, db_session):

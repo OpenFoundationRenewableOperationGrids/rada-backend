@@ -97,6 +97,10 @@ def active_languages(db: Session) -> list[Language]:
     return db.query(Language).filter(Language.is_active).order_by(Language.is_default.desc(), Language.code).all()
 
 
+def key_exists(db: Session, key: str) -> bool:
+    return db.query(Metric.id).filter(Metric.key == key).first() is not None
+
+
 def _fields(metric: Metric) -> dict:
     return {name: getattr(metric, name) for name in MetricFields.model_fields}
 
@@ -184,7 +188,7 @@ def create_metric(body: MetricCreate, db: Session = Depends(get_db)):
         raise unprocessable(errors)
 
     conflict = HTTPException(status_code=409, detail=f"A metric with key {body.key} already exists")
-    if db.query(Metric.id).filter(Metric.key == body.key).first():
+    if key_exists(db, body.key):
         raise conflict
     metric = Metric(key=body.key, unit=body.unit, kind=body.kind, level=body.level,
                     category=MetricCategory.CUSTOM, is_active=True)
