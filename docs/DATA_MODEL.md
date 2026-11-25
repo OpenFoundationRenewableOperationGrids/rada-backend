@@ -364,22 +364,27 @@ Open item, to be added to `SPEC.md` §15: whether a fixed asset may be linked to
 
 | Column | Type | Notes |
 |---|---|---|
-| email | text, unique | |
-| password_hash | text, nullable | Argon2; empty for an SSO user |
+| email | text, unique | Stored lowercased |
+| password_hash | text, nullable | Argon2; empty for an SSO user, required for a local one |
 | role | enum | `admin` or `viewer` |
 | auth_method | enum | `local` or `sso`; only `local` is used in 1.0 |
 | external_subject | text, nullable | The identity provider's identifier, for SSO later |
 | is_active | boolean | |
 | last_login_at | timestamptz, nullable | |
+| sessions_valid_after | timestamptz, nullable | Sessions issued earlier are refused: set by logout, a password change or a deactivation |
+
+Sign-in, roles and sessions: [AUTH.md](AUTH.md).
 
 ### api_key
 
 | Column | Type | Notes |
 |---|---|---|
 | name | text, unique | One per integration, for example `bridge-openems` |
-| key_hash | text | The key itself is shown once at creation |
+| prefix | text | First 12 characters of the key, to recognise it in a list |
+| key_hash | text, unique | SHA-256 of the key. The key itself is shown once at creation |
 | scope | enum | `ingest`, `export` or `admin` |
-| revoked_at, last_used_at | timestamptz, nullable | |
+| created_by_id | → app_user, nullable | The administrator who created it |
+| revoked_at, last_used_at | timestamptz, nullable | `last_used_at` is updated at most once a minute |
 
 ## §6 Migrations
 
@@ -724,8 +729,8 @@ Les colonnes de `tariff`, `fixed_asset`, `fixed_asset_link`, `app_user` et `api_
 - **tariff :** un prix de soutirage et un prix d'injection par période de validité et par site, sans chevauchement de périodes (`ex_tariff_no_overlap`, qui exige l'extension `btree_gist`). Les deux dates sont incluses : une période finissant le 31 décembre est suivie d'une période commençant le 1er janvier ; un `valid_to` vide signifie sans fin. Les prix sont **par kWh**, dans `currency` ; l'énergie est stockée en Wh : diviser par 1000 avant de valoriser. Les plages horaires sont un point ouvert (`SPEC.md` §15, O6).
 - **fixed_asset :** la vue financière d'un actif, saisie directement par une organisation sans ERP, ou réduite à la référence externe quand un ERP fait foi.
 - **fixed_asset_link :** relie un actif opérationnel à une immobilisation ; plusieurs actifs peuvent appartenir à une même immobilisation. Le partage d'un actif entre plusieurs immobilisations est un point ouvert (`SPEC.md` §15, O7). Point ouvert, à ajouter à `SPEC.md` §15 : une immobilisation peut-elle être reliée à un actif dont le site appartient à un autre portefeuille ? Rien ne l'impose en 1.0.
-- **app_user :** e-mail, mot de passe haché (Argon2), rôle `admin` ou `viewer`, et champs préparant le SSO (seul `local` est utilisé en 1.0).
-- **api_key :** une clé nommée par intégration, stockée hachée et affichée une seule fois, avec une portée `ingest`, `export` ou `admin`.
+- **app_user :** e-mail (en minuscules), mot de passe haché (Argon2), rôle `admin` ou `viewer`, champs préparant le SSO (seul `local` est utilisé en 1.0), et `sessions_valid_after`, qui termine les sessions antérieures (déconnexion, changement de mot de passe, désactivation). Voir [AUTH.md](AUTH.md).
+- **api_key :** une clé nommée par intégration, stockée hachée (SHA-256) avec ses 12 premiers caractères et affichée une seule fois, avec une portée `ingest`, `export` ou `admin`, et l'administrateur qui l'a créée.
 
 ## §6 Migrations
 

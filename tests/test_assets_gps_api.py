@@ -112,9 +112,9 @@ def test_create_asset_with_duplicate_eic_code_is_rejected(client, auth_headers):
 
 def test_missing_api_key_is_rejected(client):
     resp = client.get("/assetslist", headers={})
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 def test_wrong_api_key_is_rejected(client):
     resp = client.get("/assetslist", headers={"X-API-Key": "not-the-right-key"})
-    assert resp.status_code == 403
+    assert resp.status_code == 401

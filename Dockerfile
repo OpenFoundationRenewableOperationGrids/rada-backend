@@ -12,6 +12,7 @@ COPY bridge/requirements.txt bridge/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt -r bridge/requirements.txt
 
 COPY *.py .
+COPY auth/ auth/
 COPY alembic.ini .
 COPY alembic/ alembic/
 COPY seeds/ seeds/
