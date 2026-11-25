@@ -434,10 +434,28 @@ The seed script no longer creates or drops tables: migrations create the schema,
 
 ## §8 Ingestion API
 
-- `POST /sites/{site_id}/measurements`: a batch of `{time, metric, asset_id, value}` items, where `metric` is a key from the catalogue. The API knows nothing about OpenEMS: the bridge, the simulator, the seed and CSV import (BE-06) all post vendor-neutral metric keys.
-- The API checks that the metric exists and is active, that the asset belongs to the site, and that the metric's level allows the asset to be filled in or empty. A duplicate (same time, site, asset and metric) is ignored, not an error.
-- `GET /metrics` lists the catalogue with every translation, or one language with `?lang=de` (falling back to the default language); `POST /metrics` creates a custom metric with its translations (administrator). `GET /languages` lists the active languages. The front end picks the name matching the user's language.
-- The MVP endpoint `POST /assets/{asset_id}/telemetry` keeps working until the front end and the bridge have switched.
+The routes are in `routers/` (`catalogue.py`, `measurements.py`). Who may call them: `docs/AUTH.md` §1.
+
+- **`POST /sites/{site_id}/measurements`** (`require_ingest`) takes a batch: `{"source": "bridge-openems", "items": [{"time", "metric", "asset_id", "value"}, …]}`, where `metric` is a key from the catalogue and `asset_id` is empty for a site-wide value. The API knows nothing about OpenEMS: the bridge, the simulator, the seed and CSV import (BE-06) all post vendor-neutral metric keys.
+  - `source` is one per batch, stored on every row: `bridge-openems`, `simulator`, `seed` or `csv`.
+  - A batch holds 1 to 5,000 items (`MAX_BATCH_SIZE`), and is stored all or nothing.
+  - `time` needs a time zone and is stored in UTC. It may be at most 5 minutes in the future (`MAX_FUTURE_SKEW`).
+  - `value` is in the metric's unit, and must be finite.
+- The API checks, item by item and before writing anything:
+  - that the metric exists and is active;
+  - that the asset belongs to the site;
+  - that the metric's level allows the asset to be filled in or empty (§3.1);
+  - and the time.
+  A 422 lists every invalid item in FastAPI's format, with its index: `{"detail": [{"type": "unknown_metric", "loc": ["body", "items", 3, "metric"], "msg": "…", "input": "…"}]}`. The trigger and the foreign key of §4 stay as a safety net. If one fires anyway, the batch is still a 422 and nothing is stored. An unknown site is a 404.
+- A duplicate (same time, site, asset and metric) is ignored, not an error. The answer is `{"inserted": n, "ignored": n}`.
+- The site's `last_seen_at` moves to the latest time stored, in the same transaction. It never moves back, and a batch of duplicates leaves it unchanged.
+- **`GET /metrics`** (`require_read`) lists the catalogue, inactive metrics included, with `key`, `unit`, `kind`, `level`, `category` and `is_active`.
+  - Without `lang`, each metric has `translations`: its names in every active language.
+  - With `?lang=de`, each metric has `language`, `name` and `sign_note` instead, falling back to the default language for a metric with no name in it. `language` says which language was used.
+  - An unknown or inactive `lang` is a 422.
+- **`POST /metrics`** (`require_admin`) creates a custom metric with its translations (§3.4). A name in the default language is required. An existing key is a 409, whatever its category, and a `category` in the body is refused.
+- **`GET /languages`** (`require_read`) lists the active languages, the default one first and flagged. The front end picks the name matching the user's language.
+- The MVP endpoint `POST /assets/{asset_id}/telemetry` keeps working until the front end and the bridge have switched (BE-05 switches the bridge).
 
 ---
 
@@ -780,7 +798,25 @@ Le script de seed ne crée et ne supprime plus de tables : les migrations créen
 
 ## §8 API d'ingestion
 
-- `POST /sites/{site_id}/measurements` : un lot d'éléments `{time, metric, asset_id, value}`, où `metric` est une clé du catalogue. L'API ne connaît pas OpenEMS : le bridge, le simulateur, le seed et l'import CSV (BE-06) envoient tous des clés de métriques indépendantes du fabricant.
-- L'API vérifie que la métrique existe et est active, que l'actif appartient au site, et que le niveau de la métrique autorise un actif renseigné ou vide. Un doublon (même instant, site, actif et métrique) est ignoré, sans erreur.
-- `GET /metrics` liste le catalogue avec toutes ses traductions, ou une seule langue avec `?lang=de` (repli sur la langue par défaut) ; `POST /metrics` crée une métrique personnalisée avec ses traductions (administrateur). `GET /languages` liste les langues actives. Le front choisit le nom correspondant à la langue de l'utilisateur.
-- L'endpoint MVP `POST /assets/{asset_id}/telemetry` continue de fonctionner jusqu'à la bascule du front et du bridge.
+Les routes sont dans `routers/` (`catalogue.py`, `measurements.py`). Qui peut les appeler : `docs/AUTH.md` §1.
+
+- **`POST /sites/{site_id}/measurements`** (`require_ingest`) reçoit un lot : `{"source": "bridge-openems", "items": [{"time", "metric", "asset_id", "value"}, …]}`, où `metric` est une clé du catalogue et `asset_id` est vide pour une valeur à l'échelle du site. L'API ne connaît pas OpenEMS : le bridge, le simulateur, le seed et l'import CSV (BE-06) envoient tous des clés de métriques indépendantes du fabricant.
+  - `source` est unique par lot, et enregistrée sur chaque ligne : `bridge-openems`, `simulator`, `seed` ou `csv`.
+  - Un lot compte de 1 à 5 000 éléments (`MAX_BATCH_SIZE`), et est enregistré en entier ou pas du tout.
+  - `time` doit porter un fuseau horaire et est stocké en UTC. Il peut être au plus 5 minutes dans le futur (`MAX_FUTURE_SKEW`).
+  - `value` est dans l'unité de la métrique, et doit être finie.
+- L'API vérifie, élément par élément et avant toute écriture :
+  - que la métrique existe et est active ;
+  - que l'actif appartient au site ;
+  - que le niveau de la métrique autorise un actif renseigné ou vide (§3.1) ;
+  - et l'horodatage.
+  Une 422 liste chaque élément invalide au format de FastAPI, avec son indice : `{"detail": [{"type": "unknown_metric", "loc": ["body", "items", 3, "metric"], "msg": "…", "input": "…"}]}`. Le trigger et la clé étrangère du §4 restent un filet de sécurité. Si l'un d'eux se déclenche malgré tout, le lot est quand même une 422 et rien n'est enregistré. Un site inconnu donne une 404.
+- Un doublon (même instant, site, actif et métrique) est ignoré, sans erreur. La réponse est `{"inserted": n, "ignored": n}`.
+- Le `last_seen_at` du site passe au dernier instant enregistré, dans la même transaction. Il ne recule jamais, et un lot fait uniquement de doublons le laisse inchangé.
+- **`GET /metrics`** (`require_read`) liste le catalogue, métriques inactives comprises, avec `key`, `unit`, `kind`, `level`, `category` et `is_active`.
+  - Sans `lang`, chaque métrique porte `translations` : ses noms dans toutes les langues actives.
+  - Avec `?lang=de`, chaque métrique porte à la place `language`, `name` et `sign_note`, avec repli sur la langue par défaut pour une métrique sans nom dans cette langue. `language` indique la langue utilisée.
+  - Une `lang` inconnue ou inactive donne une 422.
+- **`POST /metrics`** (`require_admin`) crée une métrique personnalisée avec ses traductions (§3.4). Un nom dans la langue par défaut est obligatoire. Une clé existante donne une 409, quelle que soit sa catégorie, et une `category` dans le corps est refusée.
+- **`GET /languages`** (`require_read`) liste les langues actives, celle par défaut en premier et signalée. Le front choisit le nom correspondant à la langue de l'utilisateur.
+- L'endpoint MVP `POST /assets/{asset_id}/telemetry` continue de fonctionner jusqu'à la bascule du front et du bridge (BE-05 bascule le bridge).

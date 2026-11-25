@@ -15,7 +15,7 @@ GitHub issues `BE-xx` (org Project 1).
 
 | Path | What |
 |---|---|
-| `main.py` | FastAPI app: auth, CORS, Pydantic schemas, all routes |
+| `main.py` | FastAPI app: auth, CORS, Pydantic schemas, MVP routes; new routes live in router modules (`auth/routes.py`, `routers/`) |
 | `models.py` | SQLAlchemy models — must match `alembic/versions/` |
 | `database.py` | Engine (psycopg 3), `SessionLocal`, UTC on every connection |
 | `alembic/versions/` | Schema migrations `0001`…, numbered with `--rev-id` |
