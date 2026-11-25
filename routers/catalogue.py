@@ -7,20 +7,25 @@ The metric catalogue part of the API (docs/DATA_MODEL.md §8):
 - GET /metrics: every metric with its names in every active language, or in
   one language with ?lang=, falling back to the default language for a
   metric with no name in it.
+- POST /metrics: an administrator creates a custom metric with its names.
+  Core and optional metrics come only from seeds/metrics.toml.
 """
 
 from typing import Optional, Union
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from auth.deps import require_read
+from auth.deps import require_admin, require_read
 from database import get_db
-from models import Language, Metric, MetricCategory, MetricKind, MetricLevel
+from models import Language, Metric, MetricCategory, MetricKind, MetricLevel, MetricTranslation
 from routers.errors import field_error, unprocessable
 
 router = APIRouter(tags=["Metric catalogue"])
+
+METRIC_KEY_CONSTRAINT = "metric_key_key"  # the unique key on metric.key, as PostgreSQL named it
 
 
 # --- Schemas ---
@@ -61,6 +66,28 @@ class MetricInLanguageOut(MetricFields):
     )
     name: str = Field(..., examples=["Puissance batterie"])
     sign_note: Optional[str] = Field(..., examples=["Positif = décharge, négatif = charge"])
+
+
+class TranslationIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(..., min_length=1, max_length=200, examples=["Inverter temperature"])
+    sign_note: Optional[str] = Field(None, max_length=500)
+
+
+class MetricCreate(BaseModel):
+    # forbid: a category or is_active in the body is refused, not ignored
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    key: str = Field(..., max_length=64, pattern=r"^[a-z][a-z0-9_]*$", examples=["inverter_temperature"],
+                     description="Lowercase letters, digits and _, starting with a letter. Cannot be changed later.")
+    unit: str = Field(..., min_length=1, max_length=32, examples=["°C"])
+    kind: MetricKind
+    level: MetricLevel
+    translations: dict[str, TranslationIn] = Field(
+        ..., min_length=1, description="Names by language code. The default language is required.",
+        examples=[{"en": {"name": "Inverter temperature"}, "fr": {"name": "Température onduleur"}}],
+    )
 
 
 # --- Helpers ---
@@ -128,3 +155,51 @@ def list_metrics(
         )])
     default_code = db.query(Language.code).filter(Language.is_default).scalar()
     return [_metric_in_language(metric, lang, default_code) for metric in metrics]
+
+
+@router.post(
+    "/metrics", status_code=201, response_model=MetricOut,
+    dependencies=[Depends(require_admin)],
+    summary="Create a custom metric",
+    description="Creates a metric of category `custom`, active, with its names. A name in the default "
+                "language is required; names in other active languages are optional and fall back to it.",
+    responses={
+        409: {"description": "A metric with this key already exists (core, optional or custom)"},
+        422: {"description": "Invalid field, no name in the default language, or an unknown or inactive language"},
+    },
+)
+def create_metric(body: MetricCreate, db: Session = Depends(get_db)):
+    languages = active_languages(db)
+    codes = [language.code for language in languages]
+    default_code = db.query(Language.code).filter(Language.is_default).scalar()
+    errors = [
+        field_error(("body", "translations", code), "unknown_language",
+                    f"Unknown or inactive language {code!r}: see GET /languages", code)
+        for code in body.translations if code not in codes
+    ]
+    if default_code not in body.translations:
+        errors.append(field_error(("body", "translations"), "missing_default_language",
+                                  f"A name in the default language ({default_code}) is required"))
+    if errors:
+        raise unprocessable(errors)
+
+    conflict = HTTPException(status_code=409, detail=f"A metric with key {body.key} already exists")
+    if db.query(Metric.id).filter(Metric.key == body.key).first():
+        raise conflict
+    metric = Metric(key=body.key, unit=body.unit, kind=body.kind, level=body.level,
+                    category=MetricCategory.CUSTOM, is_active=True)
+    metric.translations = [
+        MetricTranslation(language_code=code, name=translation.name, sign_note=translation.sign_note)
+        for code, translation in body.translations.items()
+    ]
+    db.add(metric)
+    # The pre-check above can race with a concurrent insert: the unique key has the last word
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        if getattr(getattr(error.orig, "diag", None), "constraint_name", None) != METRIC_KEY_CONSTRAINT:
+            raise
+        raise conflict
+    db.refresh(metric)
+    return metric_out(metric, codes)

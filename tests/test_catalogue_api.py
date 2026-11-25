@@ -1,15 +1,16 @@
 """
 test_catalogue_api.py
 
-The metric catalogue routes (docs/DATA_MODEL.md §8): GET /languages and
-GET /metrics, with and without ?lang=, and who may call them.
+The metric catalogue routes (docs/DATA_MODEL.md §8): GET /languages,
+GET /metrics with and without ?lang=, POST /metrics for custom metrics, and
+who may call them.
 """
 
 import pytest
 
-from models import Language, Metric, MetricTranslation
+from models import Language, Metric, MetricCategory, MetricTranslation
 from seed_metrics import load_metric_catalogue
-from test_auth import admin, make_key  # noqa: F401 — admin is a fixture
+from test_auth import admin, make_key, viewer  # noqa: F401 — admin and viewer are fixtures
 
 CORE_METRIC_COUNT = 16  # seeds/metrics.toml: 11 core + 5 optional
 
@@ -114,6 +115,100 @@ def test_metrics_refuses_an_unknown_or_inactive_language(client, auth_headers, c
     assert response.status_code == 422
     [error] = response.json()["detail"]
     assert (error["loc"], error["type"], error["input"]) == (["query", "lang"], "unknown_language", lang)
+
+
+# --- POST /metrics ---
+
+CUSTOM_METRIC = {
+    "key": "inverter_temperature", "unit": "°C", "kind": "instantaneous", "level": "asset",
+    "translations": {"en": {"name": "Inverter temperature", "sign_note": "Heatsink sensor"},
+                     "fr": {"name": "Température onduleur"}},
+}
+
+
+def test_create_custom_metric(client, auth_headers, catalogue, db_session):
+    response = client.post("/metrics", json=CUSTOM_METRIC, headers=auth_headers)
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert {field: body[field] for field in ("key", "unit", "kind", "level", "category", "is_active")} == {
+        "key": "inverter_temperature", "unit": "°C", "kind": "instantaneous", "level": "asset",
+        "category": "custom", "is_active": True,
+    }
+    assert body["translations"] == {
+        "en": {"name": "Inverter temperature", "sign_note": "Heatsink sensor"},
+        "fr": {"name": "Température onduleur", "sign_note": None},
+    }
+    stored = db_session.query(Metric).filter(Metric.key == "inverter_temperature").one()
+    assert stored.id == body["id"]
+    assert stored.category is MetricCategory.CUSTOM
+    assert sorted(t.language_code for t in stored.translations) == ["en", "fr"]
+
+
+def test_created_metric_is_listed_after_the_catalogue(client, auth_headers, catalogue):
+    client.post("/metrics", json=CUSTOM_METRIC, headers=auth_headers)
+
+    body = client.get("/metrics", params={"lang": "de"}, headers=auth_headers).json()
+
+    assert body[-1]["key"] == "inverter_temperature"
+    assert (body[-1]["language"], body[-1]["name"]) == ("en", "Inverter temperature")
+
+
+@pytest.mark.parametrize("key", ["battery_power", "inverter_temperature"])
+def test_create_metric_refuses_an_existing_key(client, auth_headers, catalogue, key):
+    client.post("/metrics", json=CUSTOM_METRIC, headers=auth_headers)
+
+    response = client.post("/metrics", json={**CUSTOM_METRIC, "key": key}, headers=auth_headers)
+
+    assert response.status_code == 409
+    assert key in response.json()["detail"]
+
+
+def test_create_metric_needs_a_name_in_the_default_language(client, auth_headers, catalogue, db_session):
+    response = client.post("/metrics", headers=auth_headers,
+                           json={**CUSTOM_METRIC, "translations": {"fr": {"name": "Température onduleur"}}})
+
+    assert response.status_code == 422
+    [error] = response.json()["detail"]
+    assert (error["type"], error["loc"]) == ("missing_default_language", ["body", "translations"])
+    assert db_session.query(Metric).filter(Metric.key == "inverter_temperature").count() == 0
+
+
+def test_create_metric_refuses_an_unknown_language(client, auth_headers, catalogue):
+    translations = {**CUSTOM_METRIC["translations"], "xx": {"name": "?"}}
+
+    response = client.post("/metrics", json={**CUSTOM_METRIC, "translations": translations}, headers=auth_headers)
+
+    assert response.status_code == 422
+    [error] = response.json()["detail"]
+    assert (error["type"], error["loc"]) == ("unknown_language", ["body", "translations", "xx"])
+
+
+@pytest.mark.parametrize("change", [
+    {"key": "Inverter-Temp"},           # breaks the key format
+    {"key": "9th_sensor"},              # must start with a letter
+    {"unit": "  "},                     # unit required
+    {"kind": "average"},                # not a kind
+    {"category": "core"},               # the category is never chosen by the caller
+    {"translations": {"en": {"name": ""}}},
+])
+def test_create_metric_validates_the_body(client, auth_headers, catalogue, change):
+    response = client.post("/metrics", json={**CUSTOM_METRIC, **change}, headers=auth_headers)
+
+    assert response.status_code == 422
+
+
+def test_create_metric_needs_an_administrator(client, admin):  # noqa: F811
+    export_key = {"X-API-Key": make_key(client, admin, "erp", "export")["key"]}
+    ingest_key = {"X-API-Key": make_key(client, admin, "bridge", "ingest")["key"]}
+
+    assert client.post("/metrics", json=CUSTOM_METRIC).status_code == 401
+    assert client.post("/metrics", json=CUSTOM_METRIC, headers=export_key).status_code == 403
+    assert client.post("/metrics", json=CUSTOM_METRIC, headers=ingest_key).status_code == 403
+
+
+def test_create_metric_is_refused_to_a_viewer(client, viewer):  # noqa: F811
+    assert client.post("/metrics", json=CUSTOM_METRIC, headers=viewer).status_code == 403
 
 
 # --- Who may read ---
