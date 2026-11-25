@@ -15,7 +15,7 @@ from sqlalchemy import select, text
 import database
 import routers.measurements
 from models import Asset, Metric, Site, measurement
-from routers.measurements import AGGREGATE_POLICY_START_OFFSET, MAX_BATCH_SIZE, MAX_FUTURE_SKEW
+from routers.measurements import AGGREGATE_POLICY_START_OFFSET, EARLIEST_TIME, MAX_BATCH_SIZE, MAX_FUTURE_SKEW
 from seed_metrics import load_metric_catalogue
 from test_auth import admin, make_key, viewer  # noqa: F401 — admin and viewer are fixtures
 from test_site_hierarchy import make_asset, make_portfolio, make_site
@@ -185,6 +185,16 @@ def test_time_too_far_in_the_future_is_refused(client, auth_headers, db_session,
     assert errors_of(post(client, auth_headers, place["site"], [item(at=beyond)])) == [
         (("body", "items", 0, "time"), "time_in_future")]
     assert post(client, auth_headers, place["site"], [item(at=within)]).status_code == 200
+
+
+def test_time_before_the_earliest_is_refused(client, auth_headers, db_session, place):
+    before = EARLIEST_TIME - timedelta(seconds=1)
+
+    response = post(client, auth_headers, place["site"], [item(), item(at=before)])
+
+    assert errors_of(response) == [(("body", "items", 1, "time"), "time_too_old")]
+    assert stored_rows(db_session) == []
+    assert post(client, auth_headers, place["site"], [item(at=EARLIEST_TIME)]).json() == {"inserted": 1, "ignored": 0}
 
 
 @pytest.mark.parametrize("bad_item", [

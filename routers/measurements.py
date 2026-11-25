@@ -37,6 +37,9 @@ log = logging.getLogger("rada.measurements")
 MAX_BATCH_SIZE = 5000
 # Allowance for clocks that run a little ahead; anything later is refused
 MAX_FUTURE_SKEW = timedelta(minutes=5)
+# No renewable asset of the platform reports from before this: an earlier time is a
+# clock reset or a unit mistake (seconds read as milliseconds), not history
+EARLIEST_TIME = datetime(2000, 1, 1, tzinfo=timezone.utc)
 # The rules the database enforces as well, should a row get past the checks below
 # (an asset moved to another site between the check and the insert, for example)
 SAFETY_NET_CONSTRAINTS = {"ck_metric_level", "fk_measurement_asset_site"}
@@ -117,6 +120,9 @@ def item_errors(db: Session, site_id: int, items: list[MeasurementIn], metrics: 
         if item.time > latest_allowed:
             errors.append(field_error(loc + ("time",), "time_in_future",
                                       f"More than {MAX_FUTURE_SKEW} in the future", item.time))
+        elif item.time < EARLIEST_TIME:
+            errors.append(field_error(loc + ("time",), "time_too_old",
+                                      f"Before {EARLIEST_TIME.isoformat()}", item.time))
     return errors
 
 
@@ -153,10 +159,11 @@ def refresh_hourly_aggregate(stored_times: list[datetime]) -> None:
     "/sites/{site_id}/measurements", response_model=MeasurementResult,
     dependencies=[Depends(require_ingest)],
     summary="Post a batch of measurements",
-    description=f"Up to {MAX_BATCH_SIZE} items, all stored or none, for an active site. Each item's metric must "
-                "exist and be active, its asset must be on this site and active, and the metric's level must allow the asset to be filled in "
-                "(`asset`, `both`) or empty (`site`, `both`). Times need a time zone and may be at most "
-                f"{MAX_FUTURE_SKEW} in the future. An item already stored is ignored and counted in `ignored`. "
+    description=f"Up to {MAX_BATCH_SIZE} items, all stored or none, for an active site. Each item's metric "
+                "must exist and be active, its asset must be on this site and active, and the metric's level "
+                "must allow the asset to be filled in (`asset`, `both`) or empty (`site`, `both`). Times need "
+                f"a time zone, may be at most {MAX_FUTURE_SKEW} in the future, and may not be before "
+                f"{EARLIEST_TIME.date()}. An item already stored is ignored and counted in `ignored`. "
                 "For a live source (`bridge-openems`, `simulator`), the site's `last_seen_at` moves forward to "
                 "the latest time stored. Rows older than "
                 f"{AGGREGATE_POLICY_START_OFFSET.days} days are added to `measurement_hourly` before the answer.",

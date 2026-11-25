@@ -456,7 +456,7 @@ curl -X POST -H "X-API-Key: $INGEST_KEY" -H "Content-Type: application/json" \
 
 - `source` is required, and is one of `bridge-openems`, `simulator`, `seed`, `csv`.
 - A batch holds 1 to `MAX_BATCH_SIZE` (5000) items, and is stored **all or nothing**.
-- `time` needs a time zone and is stored in UTC. It may be at most `MAX_FUTURE_SKEW` (5 minutes) in the future.
+- `time` needs a time zone and is stored in UTC. It may be at most `MAX_FUTURE_SKEW` (5 minutes) in the future, and not before `EARLIEST_TIME` (2000-01-01T00:00:00Z).
 - `value` is in the metric's unit, and must be finite.
 - `asset_id` is `null` for a site-wide value.
 - A value already stored (same time, site, asset and metric) is ignored and counted in `ignored`.
@@ -467,9 +467,9 @@ curl -X POST -H "X-API-Key: $INGEST_KEY" -H "Content-Type: application/json" \
   - unknown or inactive metric;
   - asset not on this site, or inactive;
   - the metric's level (a `site` metric with an asset, an `asset` metric without one);
-  - a time in the future.
+  - a time in the future, or before 2000.
 
-Both limits are constants in `routers/measurements.py`, not environment variables.
+These limits are constants in `routers/measurements.py`, not environment variables.
 
 ---
 

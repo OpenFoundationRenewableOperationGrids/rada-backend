@@ -439,7 +439,7 @@ The routes are in `routers/` (`catalogue.py`, `measurements.py`). Who may call t
 - **`POST /sites/{site_id}/measurements`** (`require_ingest`) takes a batch: `{"source": "bridge-openems", "items": [{"time", "metric", "asset_id", "value"}, …]}`, where `metric` is a key from the catalogue and `asset_id` is empty for a site-wide value. The API knows nothing about OpenEMS: the bridge, the simulator, the seed and CSV import (BE-06) all post vendor-neutral metric keys.
   - `source` is one per batch, stored on every row: `bridge-openems`, `simulator`, `seed` or `csv`.
   - A batch holds 1 to 5,000 items (`MAX_BATCH_SIZE`), and is stored all or nothing.
-  - `time` needs a time zone and is stored in UTC. It may be at most 5 minutes in the future (`MAX_FUTURE_SKEW`).
+  - `time` needs a time zone and is stored in UTC. It may be at most 5 minutes in the future (`MAX_FUTURE_SKEW`), and not before 2000-01-01T00:00:00Z (`EARLIEST_TIME`, `time_too_old`): an earlier time is a clock reset or a unit mistake.
   - `value` is in the metric's unit, and must be finite.
 - The API checks, item by item and before writing anything:
   - that the metric exists and is active;
@@ -804,7 +804,7 @@ Les routes sont dans `routers/` (`catalogue.py`, `measurements.py`). Qui peut le
 - **`POST /sites/{site_id}/measurements`** (`require_ingest`) reçoit un lot : `{"source": "bridge-openems", "items": [{"time", "metric", "asset_id", "value"}, …]}`, où `metric` est une clé du catalogue et `asset_id` est vide pour une valeur à l'échelle du site. L'API ne connaît pas OpenEMS : le bridge, le simulateur, le seed et l'import CSV (BE-06) envoient tous des clés de métriques indépendantes du fabricant.
   - `source` est unique par lot, et enregistrée sur chaque ligne : `bridge-openems`, `simulator`, `seed` ou `csv`.
   - Un lot compte de 1 à 5 000 éléments (`MAX_BATCH_SIZE`), et est enregistré en entier ou pas du tout.
-  - `time` doit porter un fuseau horaire et est stocké en UTC. Il peut être au plus 5 minutes dans le futur (`MAX_FUTURE_SKEW`).
+  - `time` doit porter un fuseau horaire et est stocké en UTC. Il peut être au plus 5 minutes dans le futur (`MAX_FUTURE_SKEW`), et pas avant le 2000-01-01T00:00:00Z (`EARLIEST_TIME`, `time_too_old`) : un instant antérieur est une horloge réinitialisée ou une erreur d'unité.
   - `value` est dans l'unité de la métrique, et doit être finie.
 - L'API vérifie, élément par élément et avant toute écriture :
   - que la métrique existe et est active ;
